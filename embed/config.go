@@ -307,3 +307,9 @@ func (cfg Config) InitialClusterFromName(name string) (ret string) {
 	}
 	return ret[1:] //去除前面的逗号
 }
+
+// 验证*embed.Config是否被正确配置
+func (cfg *Config) Validate() error {
+	//..
+	return nil
+}
