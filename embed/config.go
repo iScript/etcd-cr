@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iScript/etcd-cr/etcdserver"
+	"github.com/iScript/etcd-cr/pkg/netutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/crypto/bcrypt"
@@ -61,6 +62,10 @@ var (
 	defaultHostname   string
 	defaultHostStatus error
 )
+
+func init() {
+	defaultHostname, defaultHostStatus = netutil.GetDefaultHost()
+}
 
 // etcd 服务器的配置参数.
 type Config struct {
@@ -183,8 +188,8 @@ type Config struct {
 	ListenMetricsUrls     []url.URL
 	ListenMetricsUrlsJSON string `json:"listen-metrics-urls"`
 
-	// Logger is logger options: "zap", "capnslog".
-	// WARN: "capnslog" is being deprecated in v3.5.
+	// Logger 可选 "zap", "capnslog".
+	// capnslog在v3.5版本中已被废弃.
 	Logger string `json:"logger"`
 
 	// DeprecatedLogOutput is to be deprecated in v3.5.
@@ -205,9 +210,7 @@ type Config struct {
 	// ZapLoggerBuilder is used to build the zap logger.
 	ZapLoggerBuilder func(*Config) error
 
-	// logger logs server-side operations. The default is nil,
-	// and "setupLogging" must be called before starting server.
-	// Do not set logger directly.
+	// 日志记录器，需要在服务启动前调用
 	loggerMu *sync.RWMutex
 	logger   *zap.Logger
 	// loggerConfig is server logger configuration for Raft logger.
@@ -312,4 +315,54 @@ func (cfg Config) InitialClusterFromName(name string) (ret string) {
 func (cfg *Config) Validate() error {
 	//..
 	return nil
+}
+
+func (cfg Config) IsNewCluster() bool { return cfg.ClusterState == ClusterStateFlagNew }
+func (cfg Config) ElectionTicks() int { return int(cfg.ElectionMs / cfg.TickMs) }
+
+// 是否为默认的peerHost ， 数组里就一个值且值为默认http://localhost:2380
+func (cfg Config) defaultPeerHost() bool {
+	return len(cfg.APUrls) == 1 && cfg.APUrls[0].String() == DefaultInitialAdvertisePeerURLs
+}
+
+// 是否为默认的clientHost ， 数组里就一个值且值为默认http://localhost:2379
+func (cfg Config) defaultClientHost() bool {
+	return len(cfg.ACUrls) == 1 && cfg.ACUrls[0].String() == DefaultAdvertiseClientURLs
+}
+
+// 更新DefaultCluster
+func (cfg *Config) UpdateDefaultClusterFromName(defaultInitialCluster string) (string, error) {
+	// 为空的情况， 本机mac为空
+	if defaultHostname == "" || defaultHostStatus != nil {
+		// 当name被指定(e.g. 'etcd --name=abc')，则更新 'initial-cluster'
+		if cfg.Name != DefaultName && cfg.InitialCluster == defaultInitialCluster {
+			cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
+		}
+		return "", defaultHostStatus
+	}
+	used := false
+	pip, pport := cfg.LPUrls[0].Hostname(), cfg.LPUrls[0].Port()
+	if cfg.defaultPeerHost() && pip == "0.0.0.0" {
+		//更改使用defaultHostname ， defaultHostname在linux平台在netutil中返回
+		cfg.APUrls[0] = url.URL{Scheme: cfg.APUrls[0].Scheme, Host: fmt.Sprintf("%s:%s", defaultHostname, pport)}
+		used = true
+	}
+
+	// 当name被指定(e.g. 'etcd --name=abc')，则更新 'initial-cluster'
+	if cfg.Name != DefaultName && cfg.InitialCluster == defaultInitialCluster {
+		cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
+	}
+
+	cip, cport := cfg.LCUrls[0].Hostname(), cfg.LCUrls[0].Port()
+	if cfg.defaultClientHost() && cip == "0.0.0.0" {
+		cfg.ACUrls[0] = url.URL{Scheme: cfg.ACUrls[0].Scheme, Host: fmt.Sprintf("%s:%s", defaultHostname, cport)}
+		used = true
+	}
+
+	dhost := defaultHostname
+	if !used {
+		dhost = ""
+	}
+	return dhost, defaultHostStatus
+
 }

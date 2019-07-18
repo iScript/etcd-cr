@@ -63,10 +63,10 @@ type configProxy struct {
 
 // 用于命令行解析的flags
 type configFlags struct {
-	flagSet *flag.FlagSet
-	// clusterState *flags.SelectiveStringValue
-	// fallback     *flags.SelectiveStringValue
-	// proxy        *flags.SelectiveStringValue
+	flagSet      *flag.FlagSet
+	clusterState *flags.SelectiveStringValue //该类型flag的值需在几个值中选，不可乱传
+	fallback     *flags.SelectiveStringValue
+	proxy        *flags.SelectiveStringValue
 }
 
 func newConfig() *config {
@@ -84,19 +84,19 @@ func newConfig() *config {
 	}
 	cfg.cf = configFlags{
 		flagSet: flag.NewFlagSet("etcd", flag.ContinueOnError),
-		// clusterState: flags.NewSelectiveStringValue(
-		// 	embed.ClusterStateFlagNew,
-		// 	embed.ClusterStateFlagExisting,
-		// ),
-		// fallback: flags.NewSelectiveStringValue(
-		// 	fallbackFlagProxy,
-		// 	fallbackFlagExit,
-		// ),
-		// proxy: flags.NewSelectiveStringValue(
-		// 	proxyFlagOff,
-		// 	proxyFlagReadonly,
-		// 	proxyFlagOn,
-		// ),
+		clusterState: flags.NewSelectiveStringValue( //该类型flag的值需在几个值中选，不可乱传
+			embed.ClusterStateFlagNew,
+			embed.ClusterStateFlagExisting,
+		),
+		fallback: flags.NewSelectiveStringValue(
+			fallbackFlagProxy,
+			fallbackFlagExit,
+		),
+		proxy: flags.NewSelectiveStringValue(
+			proxyFlagOff,
+			proxyFlagReadonly,
+			proxyFlagOn,
+		),
 	}
 
 	fs := cfg.cf.flagSet
@@ -155,21 +155,21 @@ func newConfig() *config {
 		"List of this member's client URLs to advertise to the public.",
 	)
 	fs.StringVar(&cfg.ec.Durl, "discovery", cfg.ec.Durl, "Discovery URL used to bootstrap the cluster.")
-	//fs.Var(cfg.cf.fallback, "discovery-fallback", fmt.Sprintf("Valid values include %q", cfg.cf.fallback.Valids()))
+	fs.Var(cfg.cf.fallback, "discovery-fallback", fmt.Sprintf("Valid values include %q", cfg.cf.fallback.Valids()))
 
 	fs.StringVar(&cfg.ec.Dproxy, "discovery-proxy", cfg.ec.Dproxy, "HTTP proxy to use for traffic to discovery service.")
 	fs.StringVar(&cfg.ec.DNSCluster, "discovery-srv", cfg.ec.DNSCluster, "DNS domain used to bootstrap initial cluster.")
 	fs.StringVar(&cfg.ec.DNSClusterServiceName, "discovery-srv-name", cfg.ec.DNSClusterServiceName, "Service name to query when using DNS discovery.")
 	fs.StringVar(&cfg.ec.InitialCluster, "initial-cluster", cfg.ec.InitialCluster, "Initial cluster configuration for bootstrapping.")
 	fs.StringVar(&cfg.ec.InitialClusterToken, "initial-cluster-token", cfg.ec.InitialClusterToken, "Initial cluster token for the etcd cluster during bootstrap.")
-	//fs.Var(cfg.cf.clusterState, "initial-cluster-state", "Initial cluster state ('new' or 'existing').")
+	fs.Var(cfg.cf.clusterState, "initial-cluster-state", "Initial cluster state ('new' or 'existing').")
 
 	fs.BoolVar(&cfg.ec.StrictReconfigCheck, "strict-reconfig-check", cfg.ec.StrictReconfigCheck, "Reject reconfiguration requests that would cause quorum loss.")
 	fs.BoolVar(&cfg.ec.EnableV2, "enable-v2", cfg.ec.EnableV2, "Accept etcd V2 client requests.")
 	fs.BoolVar(&cfg.ec.PreVote, "pre-vote", cfg.ec.PreVote, "Enable to run an additional Raft election phase.")
 
 	// proxy
-	//fs.Var(cfg.cf.proxy, "proxy", fmt.Sprintf("Valid values include %q", cfg.cf.proxy.Valids()))
+	fs.Var(cfg.cf.proxy, "proxy", fmt.Sprintf("Valid values include %q", cfg.cf.proxy.Valids()))
 	fs.UintVar(&cfg.cp.ProxyFailureWaitMs, "proxy-failure-wait", cfg.cp.ProxyFailureWaitMs, "Time (in milliseconds) an endpoint will be held in a failed state.")
 	fs.UintVar(&cfg.cp.ProxyRefreshIntervalMs, "proxy-refresh-interval", cfg.cp.ProxyRefreshIntervalMs, "Time (in milliseconds) of the endpoints refresh interval.")
 	fs.UintVar(&cfg.cp.ProxyDialTimeoutMs, "proxy-dial-timeout", cfg.cp.ProxyDialTimeoutMs, "Time (in milliseconds) for a dial to timeout.")
@@ -321,3 +321,7 @@ func (cfg *config) validate() error {
 	err := cfg.ec.Validate()
 	return err
 }
+
+func (cfg config) isProxy() bool               { return cfg.cf.proxy.String() != proxyFlagOff }
+func (cfg config) isReadonlyProxy() bool       { return cfg.cf.proxy.String() == proxyFlagReadonly }
+func (cfg config) shouldFallbackToProxy() bool { return cfg.cf.fallback.String() == fallbackFlagProxy }
