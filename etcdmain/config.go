@@ -200,7 +200,7 @@ func newConfig() *config {
 	fs.Var(flags.NewUniqueStringsValue("*"), "host-whitelist", "Comma-separated acceptable hostnames from HTTP client requests, if server is not secure (empty means allow all).")
 
 	// logging
-	fs.StringVar(&cfg.ec.Logger, "logger", "capnslog", "Specify 'zap' for structured logging or 'capnslog'.")
+	fs.StringVar(&cfg.ec.Logger, "logger", "zap", "Specify 'zap' for structured logging or 'capnslog'.")
 	fs.Var(flags.NewUniqueStringsValue(embed.DefaultLogOutput), "log-output", "DEPRECATED: use '--log-outputs'.")
 	fs.Var(flags.NewUniqueStringsValue(embed.DefaultLogOutput), "log-outputs", "Specify 'stdout' or 'stderr' to skip journald logging even when running under systemd, or list of comma separated output targets.")
 	fs.BoolVar(&cfg.ec.Debug, "debug", false, "Enable debug-level logging for etcd.")

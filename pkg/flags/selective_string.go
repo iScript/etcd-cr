@@ -9,7 +9,7 @@ import (
 // 需要实现flag.Value 接口.
 type SelectiveStringValue struct {
 	v      string
-	valids map[string]struct{}
+	valids map[string]struct{} //空struct相当于把map改造成set
 }
 
 // 实现 "flag.Value" 接口的string方法

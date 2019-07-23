@@ -102,13 +102,23 @@ func startEtcdOrProxyV2() {
 	} else {
 		shouldProxy := cfg.isProxy() // 默认off ， 返回false
 		if !shouldProxy {
-			fmt.Println("to start etcd")
+			_, _, err = startEtcd(&cfg.ec)
+
+			if err != nil {
+				if lg != nil {
+					lg.Warn("failed to start etcd", zap.Error(err))
+				}
+			}
 		}
 	}
 
 }
 
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
+	_, err := embed.StartEtcd(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	// select {
 	// 	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
 	// 	case <-e.Server.StopNotify(): // publish aborted from 'ErrStopped'

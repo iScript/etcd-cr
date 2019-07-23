@@ -281,7 +281,7 @@ func NewConfig() *Config {
 
 		loggerMu:            new(sync.RWMutex),
 		logger:              nil,
-		Logger:              "capnslog",
+		Logger:              "zap",
 		DeprecatedLogOutput: []string{DefaultLogOutput},
 		LogOutputs:          []string{DefaultLogOutput},
 		Debug:               false,
@@ -289,7 +289,6 @@ func NewConfig() *Config {
 	}
 
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
-	fmt.Println(cfg.InitialCluster)
 	return cfg
 }
 
@@ -313,7 +312,13 @@ func (cfg Config) InitialClusterFromName(name string) (ret string) {
 
 // 验证*embed.Config是否被正确配置
 func (cfg *Config) Validate() error {
+
+	if err := cfg.setupLogging(); err != nil {
+		return err
+	}
+
 	//..
+
 	return nil
 }
 
@@ -365,4 +370,62 @@ func (cfg *Config) UpdateDefaultClusterFromName(defaultInitialCluster string) (s
 	}
 	return dhost, defaultHostStatus
 
+}
+
+// func updateCipherSuites(tls *transport.TLSInfo, ss []string) error {
+// 	if len(tls.CipherSuites) > 0 && len(ss) > 0 {
+// 		return fmt.Errorf("TLSInfo.CipherSuites is already specified (given %v)", ss)
+// 	}
+// 	if len(ss) > 0 {
+// 		cs := make([]uint16, len(ss))
+// 		for i, s := range ss {
+// 			var ok bool
+// 			cs[i], ok = tlsutil.GetCipherSuite(s)
+// 			if !ok {
+// 				return fmt.Errorf("unexpected TLS cipher suite %q", s)
+// 			}
+// 		}
+// 		tls.CipherSuites = cs
+// 	}
+// 	return nil
+// }
+
+func (cfg *Config) getAPURLs() (ss []string) {
+	ss = make([]string, len(cfg.APUrls))
+	for i := range cfg.APUrls {
+		ss[i] = cfg.APUrls[i].String()
+	}
+	return ss
+}
+
+func (cfg *Config) getLPURLs() (ss []string) {
+	ss = make([]string, len(cfg.LPUrls))
+	for i := range cfg.LPUrls {
+		ss[i] = cfg.LPUrls[i].String()
+	}
+	return ss
+}
+
+func (cfg *Config) getACURLs() (ss []string) {
+	ss = make([]string, len(cfg.ACUrls))
+	for i := range cfg.ACUrls {
+		ss[i] = cfg.ACUrls[i].String()
+	}
+	return ss
+}
+
+func (cfg *Config) getLCURLs() (ss []string) {
+	ss = make([]string, len(cfg.LCUrls))
+	for i := range cfg.LCUrls {
+		ss[i] = cfg.LCUrls[i].String()
+	}
+	return ss
+}
+
+func (cfg *Config) getMetricsURLs() (ss []string) {
+	ss = make([]string, len(cfg.ListenMetricsUrls))
+	for i := range cfg.ListenMetricsUrls {
+		ss[i] = cfg.ListenMetricsUrls[i].String()
+	}
+	return ss
 }
