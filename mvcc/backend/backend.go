@@ -46,7 +46,7 @@ type Backend interface {
 	// OpenReadTxN() int64
 	// Defrag() error
 	// ForceCommit()
-	// Close() error
+	Close() error
 }
 
 type backend struct {
@@ -63,16 +63,16 @@ type backend struct {
 	openReadTxN int64
 
 	// mu sync.RWMutex
-	// db *bolt.DB
+	db *bolt.DB
 
-	// batchInterval time.Duration
-	// batchLimit    int
-	// batchTx       *batchTxBuffered
+	batchInterval time.Duration
+	batchLimit    int
+	//batchTx       *batchTxBuffered
 
 	// readTx *readTx
 
-	// stopc chan struct{}
-	// donec chan struct{}
+	stopc chan struct{}
+	donec chan struct{}
 
 	lg *zap.Logger
 }
@@ -111,10 +111,81 @@ func NewDefaultBackend(path string) Backend {
 }
 
 func newBackend(bcfg BackendConfig) *backend {
-	fmt.Println("new Backend")
-	return nil
+	fmt.Println("new Backend", bcfg.Path)
+	bopts := &bolt.Options{}
+
+	if boltOpenOptions != nil {
+		*bopts = *boltOpenOptions
+	}
+
+	bopts.InitialMmapSize = bcfg.mmapSize()
+	bopts.FreelistType = bcfg.BackendFreelistType
+
+	db, err := bolt.Open(bcfg.Path, 0600, bopts) //在路径下打开一个db，若没有则创建一个
+
+	if err != nil {
+		if bcfg.Logger != nil {
+			bcfg.Logger.Panic("failed to open database", zap.String("path", bcfg.Path), zap.Error(err))
+		}
+	}
+
+	b := &backend{
+		db: db,
+
+		batchInterval: bcfg.BatchInterval,
+		batchLimit:    bcfg.BatchLimit,
+
+		// readTx: &readTx{
+		// 	buf: txReadBuffer{
+		// 		txBuffer: txBuffer{make(map[string]*bucketBuffer)},
+		// 	},
+		// 	buckets: make(map[string]*bolt.Bucket),
+		// 	txWg:    new(sync.WaitGroup),
+		// },
+
+		stopc: make(chan struct{}),
+		donec: make(chan struct{}),
+
+		lg: bcfg.Logger,
+	}
+
+	go b.run() //要加go，不然
+
+	return b
+
 }
 
 func (b *backend) Size() int64 {
 	return atomic.LoadInt64(&b.size)
+}
+
+func (b *backend) SizeInUse() int64 {
+	return atomic.LoadInt64(&b.sizeInUse)
+}
+
+func (b *backend) run() {
+
+	defer close(b.donec)                //关闭done channel
+	t := time.NewTimer(b.batchInterval) //新建计时器，100毫秒后触发，通过t.C
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C: //定时器,不做操作
+		case <-b.stopc: //接收stop channel
+			fmt.Println("mvcc backend run")
+			//b.batchTx.CommitAndStop()
+			return
+		}
+		// if b.batchTx.safePending() != 0 {
+		// 	b.batchTx.Commit()
+		// }
+		t.Reset(b.batchInterval)
+	}
+}
+
+func (b *backend) Close() error {
+	fmt.Println("Closeee")
+	close(b.stopc)
+	<-b.donec
+	return b.db.Close()
 }

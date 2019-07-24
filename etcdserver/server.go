@@ -235,10 +235,10 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	//bepath := cfg.backendPath()
 	//beExist := fileutil.Exist(bepath)
 	be := openBackend(cfg)
-	fmt.Println(be)
+
 	defer func() {
 		if err != nil {
-			//be.Close()
+			be.Close()
 		}
 	}()
 

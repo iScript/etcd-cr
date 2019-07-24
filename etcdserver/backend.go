@@ -1,6 +1,7 @@
 package etcdserver
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/iScript/etcd-cr/mvcc/backend"
@@ -39,14 +40,34 @@ func newBackend(cfg ServerConfig) backend.Backend {
 // 使用当前etcd db 返回一个backend
 func openBackend(cfg ServerConfig) backend.Backend {
 
-	// fn := cfg.backendPath()
+	fn := cfg.backendPath()
 	// fmt.Println(fn, 222)
 
-	_, beOpened := time.Now(), make(chan backend.Backend)
+	now, beOpened := time.Now(), make(chan backend.Backend)
 
 	go func() {
-		beOpened <- newBackend(cfg)
+		beOpened <- newBackend(cfg) //向通道传入backend
 	}()
+	//fmt.Println("555566666", newBackend(cfg)) //调试
 
-	return nil
+	//监听channel
+	select {
+	case be := <-beOpened: //如果通道中有传入
+		fmt.Println("opened")
+		if cfg.Logger != nil {
+			cfg.Logger.Info("opened backend db", zap.String("path", fn), zap.Duration("took", time.Since(now)))
+		}
+		return be //返回，监听结束
+
+	case <-time.After(10 * time.Second): //time.After 返回time channel，等待一定时间后channel输出当前时间
+		if cfg.Logger != nil {
+			cfg.Logger.Info(
+				"db file is flocked by another process, or taking too long",
+				zap.String("path", fn),
+				zap.Duration("took", time.Since(now)),
+			)
+		}
+	}
+
+	return <-beOpened
 }
