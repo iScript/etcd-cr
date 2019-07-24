@@ -1,6 +1,7 @@
 package fileutil
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -32,4 +33,28 @@ func TouchDirAll(dir string) error {
 		return err
 	}
 	return IsDirWriteable(dir)
+}
+
+// CreateDirAll is similar to TouchDirAll but returns error
+// if the deepest directory was not empty.
+// readdir 返回最深？ 后续
+func CreateDirAll(dir string) error {
+	err := TouchDirAll(dir)
+	if err == nil {
+		var ns []string
+		ns, err = ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		if len(ns) != 0 {
+			err = fmt.Errorf("expected %q to be empty, got %q", dir, ns)
+		}
+	}
+	return err
+}
+
+// 判断文件或目录是否存在
+func Exist(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
 }

@@ -16,7 +16,9 @@ const (
 var (
 	// protects raftStatus
 	raftStatusMu sync.Mutex
-	// indirection for expvar func interface
+	// indir
+
+	//ection for expvar func interface
 	// expvar panics when publishing duplicate name
 	// expvar does not support remove a registered name
 	// so only register a func that calls raftStatus

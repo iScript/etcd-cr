@@ -28,7 +28,7 @@ const (
 	DefaultGRPCKeepAliveInterval = 2 * time.Hour
 	DefaultGRPCKeepAliveTimeout  = 20 * time.Second
 
-	DefaultListenPeerURLs   = "http://localhost:2380" //peer通信
+	DefaultListenPeerURLs   = "http://localhost:2380" //peer通信，即etcd节点内部通信
 	DefaultListenClientURLs = "http://localhost:2379" //监听客户端请求
 
 	DefaultLogOutput = "default"
@@ -99,6 +99,7 @@ type Config struct {
 	BackendBatchInterval time.Duration `json:"backend-batch-interval"`
 	// BackendBatchLimit is the maximum operations before commit the backend transaction.
 	BackendBatchLimit int   `json:"backend-batch-limit"`
+	Test              int   `json:"test"`
 	QuotaBackendBytes int64 `json:"quota-backend-bytes"`
 	MaxTxnOps         uint  `json:"max-txn-ops"`
 	MaxRequestBytes   uint  `json:"max-request-bytes"`

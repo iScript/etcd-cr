@@ -219,16 +219,28 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 
 	//haveWAL := wal.Exist(cfg.WALDir())
-	fmt.Println(cfg.SnapDir())
-	// if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
-	// 	if cfg.Logger != nil {
-	// 		cfg.Logger.Fatal(
-	// 			"failed to create snapshot directory",
-	// 			zap.String("path", cfg.SnapDir()),
-	// 			zap.Error(err),
-	// 		)
-	// 	}
-	// }
+
+	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Fatal(
+				"failed to create snapshot directory ",
+				zap.String("path", cfg.SnapDir()),
+				zap.Error(err),
+			)
+		}
+	}
+
+	//ss := snap.New(cfg.Logger, cfg.SnapDir())
+
+	//bepath := cfg.backendPath()
+	//beExist := fileutil.Exist(bepath)
+	be := openBackend(cfg)
+	fmt.Println(be)
+	defer func() {
+		if err != nil {
+			//be.Close()
+		}
+	}()
 
 	return nil, nil
 }

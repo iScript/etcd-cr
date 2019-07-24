@@ -10,6 +10,7 @@ require (
 	github.com/dustin/go-humanize v1.0.0
 	github.com/gogo/protobuf v1.2.1 // indirect
 	github.com/prometheus/client_golang v1.0.0 // indirect
+	go.etcd.io/bbolt v1.3.3
 	go.etcd.io/etcd v3.3.13+incompatible
 	go.uber.org/atomic v1.4.0 // indirect
 	go.uber.org/multierr v1.1.0 // indirect

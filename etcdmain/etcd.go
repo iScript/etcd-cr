@@ -96,9 +96,28 @@ func startEtcdOrProxyV2() {
 	// var errc <-chan error
 
 	which := identifyDataDirOrDie(cfg.ec.GetLogger(), cfg.ec.Dir)
-
+	// 初次启动为空即dirEmpty , 第二次启动则为member
 	if which != dirEmpty {
-
+		if lg != nil {
+			lg.Info(
+				"server has been already initialized",
+				zap.String("data-dir", cfg.ec.Dir),
+				zap.String("dir-type", string(which)),
+			)
+		}
+		switch which {
+		case dirMember:
+			_, _, err = startEtcd(&cfg.ec)
+		case dirProxy:
+			//err = startProxy(cfg)
+		default:
+			if lg != nil {
+				lg.Panic(
+					"unknown directory type",
+					zap.String("dir-type", string(which)),
+				)
+			}
+		}
 	} else {
 		shouldProxy := cfg.isProxy() // 默认off ， 返回false
 		if !shouldProxy {
@@ -110,6 +129,10 @@ func startEtcdOrProxyV2() {
 				}
 			}
 		}
+	}
+
+	if err != nil {
+
 	}
 
 }

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"time"
 
+	bolt "go.etcd.io/bbolt" //应该是原先的bolt停止维护了，该bbolt是fork过来的
 	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -39,7 +40,7 @@ type ServerConfig struct {
 	BackendBatchLimit int
 
 	// BackendFreelistType is the type of the backend boltdb freelist.
-	//BackendFreelistType bolt.FreelistType
+	BackendFreelistType bolt.FreelistType
 
 	//InitialPeerURLsMap  types.URLsMap
 	InitialClusterToken string
@@ -116,3 +117,44 @@ func (c *ServerConfig) WALDir() string {
 }
 
 func (c *ServerConfig) SnapDir() string { return filepath.Join(c.MemberDir(), "snap") }
+
+func (c *ServerConfig) ShouldDiscover() bool { return c.DiscoveryURL != "" }
+
+// ReqTimeout returns timeout for request to finish.
+func (c *ServerConfig) ReqTimeout() time.Duration {
+	// 5s for queue waiting, computation and disk IO delay
+	// + 2 * election timeout for possible leader election
+	return 5*time.Second + 2*time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
+}
+
+func (c *ServerConfig) electionTimeout() time.Duration {
+	return time.Duration(c.ElectionTicks*int(c.TickMs)) * time.Millisecond
+}
+
+func (c *ServerConfig) peerDialTimeout() time.Duration {
+	// 1s for queue wait and election timeout
+	return time.Second + time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
+}
+
+func checkDuplicateURL(urlsmap types.URLsMap) bool {
+	um := make(map[string]bool)
+	for _, urls := range urlsmap {
+		for _, url := range urls {
+			u := url.String()
+			if um[u] {
+				return true
+			}
+			um[u] = true
+		}
+	}
+	return false
+}
+
+func (c *ServerConfig) bootstrapTimeout() time.Duration {
+	if c.BootstrapTimeout != 0 {
+		return c.BootstrapTimeout
+	}
+	return time.Second
+}
+
+func (c *ServerConfig) backendPath() string { return filepath.Join(c.SnapDir(), "db") }
