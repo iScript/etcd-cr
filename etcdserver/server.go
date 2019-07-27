@@ -259,7 +259,6 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		return nil, err
 	}
 
-	fmt.Println(prt)
 	// var (
 	// 	remotes  []*membership.Member
 	// 	snapshot *raftpb.Snapshot
@@ -276,13 +275,20 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 		//根据参数初始化cluster
 		cl, err = membership.NewClusterFromURLsMap(cfg.Logger, cfg.InitialClusterToken, cfg.InitialPeerURLsMap)
+
 		if err != nil {
 			return nil, err
 		}
 		m := cl.MemberByName(cfg.Name)
+		//指定的member是否在集群中已启动
 		if isMemberBootstrapped(cfg.Logger, cl, cfg.Name, prt, cfg.bootstrapTimeout()) {
 			return nil, fmt.Errorf("member %s has already been bootstrapped", m.ID)
 		}
+
+		if cfg.ShouldDiscover() {
+			// 默认false ， 后续再看
+		}
+
 	case haveWAL:
 		fmt.Println(333)
 	default:

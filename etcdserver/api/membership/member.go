@@ -86,3 +86,14 @@ func (m *Member) Clone() *Member {
 	}
 	return mm
 }
+
+func (m *Member) IsStarted() bool {
+	return len(m.Name) != 0
+}
+
+// MembersByID implements sort by ID interface
+type MembersByID []*Member
+
+func (ms MembersByID) Len() int           { return len(ms) }
+func (ms MembersByID) Less(i, j int) bool { return ms[i].ID < ms[j].ID }
+func (ms MembersByID) Swap(i, j int)      { ms[i], ms[j] = ms[j], ms[i] }
