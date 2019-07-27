@@ -1,11 +1,13 @@
 package etcdserver
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
+	"github.com/iScript/etcd-cr/pkg/transport"
+	"github.com/iScript/etcd-cr/pkg/types"
 	bolt "go.etcd.io/bbolt" //应该是原先的bolt停止维护了，该bbolt是fork过来的
-	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -42,10 +44,10 @@ type ServerConfig struct {
 	// BackendFreelistType is the type of the backend boltdb freelist.
 	BackendFreelistType bolt.FreelistType
 
-	//InitialPeerURLsMap  types.URLsMap
+	InitialPeerURLsMap  types.URLsMap
 	InitialClusterToken string
 	NewCluster          bool
-	//PeerTLSInfo         transport.TLSInfo
+	PeerTLSInfo         transport.TLSInfo
 
 	CORS map[string]struct{}
 
@@ -107,6 +109,32 @@ type ServerConfig struct {
 	EnableGRPCGateway bool
 }
 
+// 验证初始配置
+func (c *ServerConfig) VerifyBootstrap() error {
+	if err := c.hasLocalMember(); err != nil {
+		return err
+	}
+	// 其他一些验证。。
+	// if err := c.advertiseMatchesCluster(); err != nil {
+	// 	return err
+	// }
+	// if checkDuplicateURL(c.InitialPeerURLsMap) {
+	// 	return fmt.Errorf("initial cluster %s has duplicate url", c.InitialPeerURLsMap)
+	// }
+	// if c.InitialPeerURLsMap.String() == "" && c.DiscoveryURL == "" {
+	// 	return fmt.Errorf("initial cluster unset and no discovery URL found")
+	// }
+	return nil
+}
+
+// 检查集群是否至少包含本地服务器. 判断方式为通过name参数找map里是否有值
+func (c *ServerConfig) hasLocalMember() error {
+	if urls := c.InitialPeerURLsMap[c.Name]; urls == nil {
+		return fmt.Errorf("couldn't find local name %q in the initial cluster configuration", c.Name)
+	}
+	return nil
+}
+
 func (c *ServerConfig) MemberDir() string { return filepath.Join(c.DataDir, "member") }
 
 func (c *ServerConfig) WALDir() string {
@@ -132,7 +160,9 @@ func (c *ServerConfig) electionTimeout() time.Duration {
 }
 
 func (c *ServerConfig) peerDialTimeout() time.Duration {
-	// 1s for queue wait and election timeout
+	// 1s + 选举超时 1秒
+	//  embed config  TickMs默认100, ElectionMs 默认 1000, ElectionTicks=ElectionMs/TickMs
+	// 乘回去即 ElectionMs 1000 * 毫秒 = 1秒
 	return time.Second + time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
 }
 

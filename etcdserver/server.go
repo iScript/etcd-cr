@@ -9,9 +9,12 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	humanize "github.com/dustin/go-humanize"
+	"github.com/iScript/etcd-cr/etcdserver/api/membership"
+	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
+	"github.com/iScript/etcd-cr/wal"
 	"go.uber.org/zap"
 )
 
@@ -145,7 +148,7 @@ type EtcdServer struct {
 	id     types.ID
 	//attributes membership.Attributes
 
-	//cluster *membership.RaftCluster
+	cluster *membership.RaftCluster
 
 	v2store v2store.Store
 	// snapshotter *snap.Snapshotter
@@ -199,6 +202,14 @@ type EtcdServer struct {
 
 func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 
+	var (
+		// w  *wal.WAL
+		// n  raft.Node
+		// s  *raft.MemoryStorage
+		// id types.ID
+		cl *membership.RaftCluster
+	)
+
 	//默认cfg.MaxRequestBytes = 1.5 * 1024 * 1024  recommendedMaxRequestBytes = 10 * 1024 * 1024，没有大于
 	if cfg.MaxRequestBytes > recommendedMaxRequestBytes {
 		//
@@ -218,7 +229,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		return nil, fmt.Errorf("cannot access data directory: %v", terr)
 	}
 
-	//haveWAL := wal.Exist(cfg.WALDir())
+	//member/wal中是否有.wal文件
+	haveWAL := wal.Exist(cfg.WALDir())
 
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		if cfg.Logger != nil {
@@ -241,6 +253,66 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			be.Close()
 		}
 	}()
+
+	prt, err := rafthttp.NewRoundTripper(cfg.PeerTLSInfo, cfg.peerDialTimeout())
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println(prt)
+	// var (
+	// 	remotes  []*membership.Member
+	// 	snapshot *raftpb.Snapshot
+	// )
+
+	//fmt.Println(haveWAL, cfg.NewCluster) // 默认false true
+	switch {
+	case !haveWAL && !cfg.NewCluster:
+		fmt.Println(111)
+	case !haveWAL && cfg.NewCluster:
+		// 一些验证
+		if err = cfg.VerifyBootstrap(); err != nil {
+			return nil, err
+		}
+		//根据参数初始化cluster
+		cl, err = membership.NewClusterFromURLsMap(cfg.Logger, cfg.InitialClusterToken, cfg.InitialPeerURLsMap)
+		if err != nil {
+			return nil, err
+		}
+		m := cl.MemberByName(cfg.Name)
+		if isMemberBootstrapped(cfg.Logger, cl, cfg.Name, prt, cfg.bootstrapTimeout()) {
+			return nil, fmt.Errorf("member %s has already been bootstrapped", m.ID)
+		}
+	case haveWAL:
+		fmt.Println(333)
+	default:
+		return nil, fmt.Errorf("unsupported bootstrap config")
+	}
+
+	if terr := fileutil.TouchDirAll(cfg.MemberDir()); terr != nil {
+		return nil, fmt.Errorf("cannot access member directory: %v", terr)
+	}
+
+	srv = &EtcdServer{
+		readych: make(chan struct{}),
+		Cfg:     cfg, //serverConfig
+		lgMu:    new(sync.RWMutex),
+		lg:      cfg.Logger,
+		errorc:  make(chan error, 1),
+		//v2store: st,
+		//snapshotter: ss,  etcdserver/api/snap
+		// r: *newRaftNode(
+		// 	raftNodeConfig{
+		// 		lg:          cfg.Logger,
+		// 		isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
+		// 		Node:        n,
+		// 		heartbeat:   heartbeat,
+		// 		raftStorage: s,
+		// 		storage:     NewStorage(w, ss),
+		// 	},
+		// ),
+		cluster: cl,
+	}
 
 	return nil, nil
 }

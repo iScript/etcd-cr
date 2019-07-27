@@ -167,10 +167,11 @@ func (b *backend) run() {
 
 	defer close(b.donec)                //关闭done channel
 	t := time.NewTimer(b.batchInterval) //新建计时器，100毫秒后触发，通过t.C
-	defer t.Stop()
+	defer t.Stop()                      // 停止timer
 	for {
+		// 监听，如果都不满足case，则阻塞，满足继续执行下面的
 		select {
-		case <-t.C: //定时器,不做操作
+		case <-t.C: //定时器时间到后接收,不做操作
 		case <-b.stopc: //接收stop channel
 			fmt.Println("mvcc backend run")
 			//b.batchTx.CommitAndStop()
@@ -179,13 +180,15 @@ func (b *backend) run() {
 		// if b.batchTx.safePending() != 0 {
 		// 	b.batchTx.Commit()
 		// }
-		t.Reset(b.batchInterval)
+
+		t.Reset(b.batchInterval) // timer需要reset实现定时器效果，不然只执行一次
 	}
+
 }
 
 func (b *backend) Close() error {
-	fmt.Println("Closeee")
-	close(b.stopc)
+
+	close(b.stopc) // 关闭stop通道，会通知select里的<-b.stopc
 	<-b.donec
 	return b.db.Close()
 }

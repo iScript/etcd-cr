@@ -9,6 +9,8 @@ import (
 
 	"github.com/iScript/etcd-cr/etcdserver"
 	"github.com/iScript/etcd-cr/pkg/netutil"
+	"github.com/iScript/etcd-cr/pkg/transport"
+	"github.com/iScript/etcd-cr/pkg/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/crypto/bcrypt"
@@ -108,7 +110,7 @@ type Config struct {
 	APUrls, ACUrls []url.URL
 	// ClientTLSInfo  transport.TLSInfo
 	// ClientAutoTLS  bool
-	// PeerTLSInfo    transport.TLSInfo
+	PeerTLSInfo transport.TLSInfo
 	// PeerAutoTLS    bool
 
 	CipherSuites []string `json:"cipher-suites"`
@@ -321,6 +323,24 @@ func (cfg *Config) Validate() error {
 	//..
 
 	return nil
+}
+
+// 为引导或发现设置初始的peer urlmap和集群令牌。
+func (cfg *Config) PeerURLsMapAndToken(which string) (urlsmap types.URLsMap, token string, err error) {
+	token = cfg.InitialClusterToken // 默认为etcd-cluster字符串
+	switch {
+	case cfg.Durl != "":
+		urlsmap = types.URLsMap{}
+		// If using discovery, generate a temporary cluster based on
+		// self's advertised peer URLs
+		urlsmap[cfg.Name] = cfg.APUrls
+		token = cfg.Durl
+	case cfg.DNSCluster != "":
+	default:
+		urlsmap, err = types.NewURLsMap(cfg.InitialCluster) //参数默认为 name=http://localhost:2380
+	}
+	// 默认返回 map[test:http://localhost:2380] etcd-cluster err
+	return urlsmap, token, err
 }
 
 func (cfg Config) IsNewCluster() bool { return cfg.ClusterState == ClusterStateFlagNew }

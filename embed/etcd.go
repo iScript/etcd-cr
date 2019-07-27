@@ -10,6 +10,7 @@ import (
 
 	"github.com/coreos/pkg/capnslog"
 	"github.com/iScript/etcd-cr/etcdserver"
+	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/version"
 	"go.uber.org/zap"
 )
@@ -93,31 +94,35 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	// 	return e, err
 	// }
 
+	var (
+		urlsmap types.URLsMap
+		token   string
+	)
 	memberInitialized := true
 	if !isMemberInitialized(cfg) {
 		memberInitialized = false
-		// urlsmap, token, err = cfg.PeerURLsMapAndToken("etcd")
-		// if err != nil {
-		// 	return e, fmt.Errorf("error setting up initial cluster: %v", err)
-		// }
+		urlsmap, token, err = cfg.PeerURLsMapAndToken("etcd")
+		if err != nil {
+			return e, fmt.Errorf("error setting up initial cluster: %v", err)
+		}
 	}
 
 	srvcfg := etcdserver.ServerConfig{
-		Name:                   cfg.Name,
-		ClientURLs:             cfg.ACUrls,
-		PeerURLs:               cfg.APUrls,
-		DataDir:                cfg.Dir,
-		DedicatedWALDir:        cfg.WalDir,
-		SnapshotCount:          cfg.SnapshotCount,
-		SnapshotCatchUpEntries: cfg.SnapshotCatchUpEntries,
-		MaxSnapFiles:           cfg.MaxSnapFiles,
-		MaxWALFiles:            cfg.MaxWalFiles,
-		//InitialPeerURLsMap:         urlsmap,
-		//InitialClusterToken:        token,
-		DiscoveryURL:   cfg.Durl,
-		DiscoveryProxy: cfg.Dproxy,
-		NewCluster:     cfg.IsNewCluster(),
-		//PeerTLSInfo:                cfg.PeerTLSInfo,
+		Name:                       cfg.Name,
+		ClientURLs:                 cfg.ACUrls,
+		PeerURLs:                   cfg.APUrls,
+		DataDir:                    cfg.Dir,
+		DedicatedWALDir:            cfg.WalDir,
+		SnapshotCount:              cfg.SnapshotCount,
+		SnapshotCatchUpEntries:     cfg.SnapshotCatchUpEntries,
+		MaxSnapFiles:               cfg.MaxSnapFiles,
+		MaxWALFiles:                cfg.MaxWalFiles,
+		InitialPeerURLsMap:         urlsmap,
+		InitialClusterToken:        token,
+		DiscoveryURL:               cfg.Durl,
+		DiscoveryProxy:             cfg.Dproxy,
+		NewCluster:                 cfg.IsNewCluster(),
+		PeerTLSInfo:                cfg.PeerTLSInfo,
 		TickMs:                     cfg.TickMs,
 		ElectionTicks:              cfg.ElectionTicks(),
 		InitialElectionTickAdvance: cfg.InitialElectionTickAdvance,

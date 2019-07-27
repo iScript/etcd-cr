@@ -21,6 +21,7 @@ func (op *ReadDirOp) applyOpts(opts []ReadDirOption) {
 	}
 }
 
+// 参数为文件后缀 ， 如参数.wal，返回的func传入readdir的opts，则只找.wal的文件
 func WithExt(ext string) ReadDirOption {
 	return func(op *ReadDirOp) { op.ext = ext }
 }
