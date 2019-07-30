@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +28,7 @@ var (
 type Backend interface {
 	// ReadTx returns a read transaction. It is replaced by ConcurrentReadTx in the main data path, see #10523.
 	// ReadTx() ReadTx
-	// BatchTx() BatchTx
+	BatchTx() BatchTx
 	// // ConcurrentReadTx returns a non-blocking read transaction.
 	// ConcurrentReadTx() ReadTx
 
@@ -67,9 +68,9 @@ type backend struct {
 
 	batchInterval time.Duration
 	batchLimit    int
-	//batchTx       *batchTxBuffered
+	batchTx       *batchTxBuffered
 
-	// readTx *readTx
+	readTx *readTx
 
 	stopc chan struct{}
 	donec chan struct{}
@@ -135,13 +136,14 @@ func newBackend(bcfg BackendConfig) *backend {
 		batchInterval: bcfg.BatchInterval,
 		batchLimit:    bcfg.BatchLimit,
 
-		// readTx: &readTx{
-		// 	buf: txReadBuffer{
-		// 		txBuffer: txBuffer{make(map[string]*bucketBuffer)},
-		// 	},
-		// 	buckets: make(map[string]*bolt.Bucket),
-		// 	txWg:    new(sync.WaitGroup),
-		// },
+		// read_tx.go
+		readTx: &readTx{
+			buf: txReadBuffer{
+				txBuffer: txBuffer{make(map[string]*bucketBuffer)},
+			},
+			buckets: make(map[string]*bolt.Bucket),
+			txWg:    new(sync.WaitGroup),
+		},
 
 		stopc: make(chan struct{}),
 		donec: make(chan struct{}),
@@ -149,10 +151,16 @@ func newBackend(bcfg BackendConfig) *backend {
 		lg: bcfg.Logger,
 	}
 
+	b.batchTx = newBatchTxBuffered(b)
 	go b.run() //要加go，不然
 
 	return b
 
+}
+
+// 获取Batch ， 返回Batch接口
+func (b *backend) BatchTx() BatchTx {
+	return b.batchTx
 }
 
 func (b *backend) Size() int64 {

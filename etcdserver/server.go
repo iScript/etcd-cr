@@ -288,6 +288,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		if cfg.ShouldDiscover() {
 			// 默认false ， 后续再看
 		}
+		//cl.SetStore(st)
+		cl.SetBackend(be)
 
 	case haveWAL:
 		fmt.Println(333)
