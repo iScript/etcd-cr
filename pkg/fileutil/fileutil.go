@@ -27,7 +27,7 @@ func IsDirWriteable(dir string) error {
 
 // TouchDirAll 类似 os.MkdirAll. 创建一个 0700 权限的文件夹 如果该文件夹不存在的话。
 func TouchDirAll(dir string) error {
-	// 如果文件夹已存在，则不做任何事，返回nil
+	// os.MkdirAll如果文件夹已存在，则不做任何事，返回nil
 	err := os.MkdirAll(dir, PrivateDirMode)
 	if err != nil {
 		return err
@@ -35,9 +35,8 @@ func TouchDirAll(dir string) error {
 	return IsDirWriteable(dir)
 }
 
-// CreateDirAll is similar to TouchDirAll but returns error
-// if the deepest directory was not empty.
-// readdir 返回最深？ 后续
+// 和 TouchDirAll类似，但保证文件夹为空
+// readdir 返回最深？
 func CreateDirAll(dir string) error {
 	err := TouchDirAll(dir)
 	if err == nil {

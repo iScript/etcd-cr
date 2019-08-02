@@ -3,7 +3,7 @@ package embed
 import (
 	"path/filepath"
 
-	"go.etcd.io/etcd/wal"
+	"github.com/iScript/etcd-cr/wal"
 )
 
 // 成员是否初始化，判断依据是是否存在wal文件夹

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.etcd.io/etcd/pkg/types"
+	"github.com/iScript/etcd-cr/pkg/types"
 )
 
 type UniqueURLs struct {

@@ -290,6 +290,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 		//cl.SetStore(st)
 		cl.SetBackend(be)
+		startNode(cfg, cl, cl.MemberIDs())
 
 	case haveWAL:
 		fmt.Println(333)
