@@ -2,7 +2,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -358,7 +357,7 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 func (r *raft) resetRandomizedElectionTimeout() {
 	//electionTimeout = ElectionTick 默认为10
 	r.randomizedElectionTimeout = r.electionTimeout + globalRand.Intn(r.electionTimeout)
-	fmt.Println(r.randomizedElectionTimeout)
+	//fmt.Println(r.randomizedElectionTimeout)
 }
 
 func (r *raft) sendTimeoutNow(to uint64) {
