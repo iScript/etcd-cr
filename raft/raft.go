@@ -2,8 +2,10 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,13 +93,13 @@ type Config struct {
 	// ID 是本地raft的唯一标示符，不能为0
 	ID uint64
 
-	// 包含集群中所有node的id.
+	// 包含集群中所有节点的id.
 	peers []uint64
 
 	//  learner nodes 的id
 	learners []uint64
 
-	// ElectionTick 选举计时器
+	// ElectionTick 选举计时器，用于初始化raft.electionTimeout
 	// 每个follower节点在接收不到leader节点的心跳消息之后，并不会立即发起新一轮选举，而是需要等待一段时间之后才切换成candidate发起新一轮选举
 	// ElectionTick设置的必须比ElectionTick高，建议为10*HeartbeatTick
 	ElectionTick int
@@ -106,10 +108,10 @@ type Config struct {
 	// 收到心跳消息后会重置选举计时器，所以心跳超时时间要远小于选举超时时间
 	HeartbeatTick int
 
-	// raft中的存储，持久化存储entries和states。
+	// raft中的日志存储，持久化存储entries和states。
 	Storage Storage
 
-	// 最后应用的索引，在重启时设置。如果重启没设置，raft会返回上一个applied entries
+	// 当前已经应用的记录位置（已应用的最后一条entry记录的索引值），在重启时需要设置。
 	Applied uint64
 
 	// 限制每个附加消息的字节大小
@@ -129,25 +131,13 @@ type Config struct {
 	// 如果超过这个阈值，则暂停当前节点的的消息发送，防止网络阻塞
 	MaxInflightMsgs int
 
-	// CheckQuorum specifies if the leader should check quorum activity. Leader
-	// steps down when quorum is not active for an electionTimeout.
+	// 是否开启checkQuorum模式，用于初始化raft.checkQuorum
 	CheckQuorum bool
 
-	// PreVote enables the Pre-Vote algorithm described in raft thesis section
-	// 9.6. This prevents disruption when a node that has been partitioned away
-	// rejoins the cluster.
+	// 是否开启prevote模式，用于初始化raft.prevote
 	PreVote bool
-	// ReadOnlyOption specifies how the read only request is processed.
-	//
-	// ReadOnlySafe guarantees the linearizability of the read only request by
-	// communicating with the quorum. It is the default and suggested option.
-	//
-	// ReadOnlyLeaseBased ensures linearizability of the read only request by
-	// relying on the leader lease. It can be affected by clock drift.
-	// If the clock drift is unbounded, leader might keep the lease longer than it
-	// should (clock can move backward/pause without any bound). ReadIndex is not safe
-	// in that case.
-	// CheckQuorum MUST be enabled if ReadOnlyOption is ReadOnlyLeaseBased.
+
+	//与只读请求的处理相关
 	ReadOnlyOption ReadOnlyOption
 
 	// raft日志 ， 需要实现log.go接口里的
@@ -261,7 +251,18 @@ func newRaft(c *Config) *raft {
 		panic(err.Error())
 	}
 
+	// 创建raftlog实例
 	raftlog := newLogWithSize(c.Storage, c.Logger, c.MaxCommittedSizePerReady)
+	hs, cs, err := c.Storage.InitialState() // 返回storage初始状态信息
+	if err != nil {
+		panic(err)
+	}
+
+	//peers := c.peers
+	if len(cs.Voters) > 0 || len(cs.Learners) > 0 {
+
+	}
+
 	r := &raft{
 		id:                        c.ID,
 		lead:                      None,
@@ -278,8 +279,30 @@ func newRaft(c *Config) *raft {
 		readOnly:                  newReadOnly(c.ReadOnlyOption),
 		disableProposalForwarding: c.DisableProposalForwarding,
 	}
-	//r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
-	//	r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
+
+	// for _, p := range peers {
+
+	// }
+
+	// 如果不为空
+	if !isHardStateEqual(hs, emptyState) {
+		r.loadState(hs)
+	}
+	if c.Applied > 0 {
+		//raftlog.appliedTo(c.Applied)
+	}
+
+	//成为follower
+	r.becomeFollower(r.Term, None)
+
+	var nodesStrs []string
+	for _, n := range r.prs.VoterNodes() {
+		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
+	}
+
+	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
+		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
+
 	return r
 }
 
@@ -300,6 +323,7 @@ func (r *raft) hardState() pb.HardState {
 	}
 }
 
+// 重置字段
 func (r *raft) reset(term uint64) {
 	if r.Term != term {
 		r.Term = term
@@ -309,12 +333,13 @@ func (r *raft) reset(term uint64) {
 
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
-	r.resetRandomizedElectionTimeout() //重置leader超时时间
+	r.resetRandomizedElectionTimeout() //重置选举计时器超时时间
 
 	r.abortLeaderTransfer()
 
 	r.prs.ResetVotes()
 
+	// 重置prs，其中每个progress中的next设置为raftlog.lastIndex
 	// r.prs.Visit(func(id uint64, pr *tracker.Progress) {
 	// 	*pr = tracker.Progress{
 	// 		Match:     0,
@@ -332,24 +357,25 @@ func (r *raft) reset(term uint64) {
 	r.readOnly = newReadOnly(r.readOnly.option)
 }
 
-// tickElection 在r.electionTimeout之后被followers和candidates调用
+// 周期性地调用该方法推进electionElapsed并检测是否超时
 func (r *raft) tickElection() {
 	r.electionElapsed++
 
-	// if r.promotable() && r.pastElectionTimeout() {
-	// 	r.electionElapsed = 0
-	// 	r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
-	// }
+	if r.promotable() && r.pastElectionTimeout() {
+		r.electionElapsed = 0 //重置
+		// 发起选举
+		//r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
+	}
 }
 
 // 成为平民
 func (r *raft) becomeFollower(term uint64, lead uint64) {
-	//r.step = stepFollower
-	r.reset(term)
+	r.step = stepFollower   //将step字段设置成stepFollower，该函数中封装了Follower节点处理消息的行为
+	r.reset(term)           // 重置相关字段
 	r.tick = r.tickElection //func赋值
-	// r.lead = lead
-	// r.state = StateFollower
-	// r.logger.Infof("%x became follower at term %d", r.id, r.Term)
+	r.lead = lead           //设置当前集群的leader节点
+	r.state = StateFollower // 设置当前节点的角色
+	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
 }
 
 // 重置选举超时时间
@@ -371,7 +397,30 @@ func (r *raft) abortLeaderTransfer() {
 
 // 标示状态机是否可提升为leader,
 func (r *raft) promotable() bool {
-	//pr := r.prs.Progress[r.id]
-	//return pr != nil && !pr.IsLearner
-	return false
+	pr := r.prs.Progress[r.id]
+	return pr != nil && !pr.IsLearner
+	//return false
+}
+
+// func (r *raft) applyConfChange(cc pb.ConfChangeV2) pb.ConfState {
+
+// }
+
+func (r *raft) loadState(state pb.HardState) {
+	fmt.Println(state.Vote, state.Term)
+	// if state.Commit < r.raftLog.committed || state.Commit > r.raftLog.lastIndex() {
+	// 	r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, state.Commit, r.raftLog.committed, r.raftLog.lastIndex())
+	// }
+	// r.raftLog.committed = state.Commit
+	// r.Term = state.Term
+	// r.Vote = state.Vote
+}
+
+// 检测是否超时
+func (r *raft) pastElectionTimeout() bool {
+	return r.electionElapsed >= r.randomizedElectionTimeout
+}
+
+func stepFollower(r *raft, m pb.Message) error {
+	return nil
 }

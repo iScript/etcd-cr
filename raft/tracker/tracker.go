@@ -1,7 +1,14 @@
 package tracker
 
+import (
+	"fmt"
+	"sort"
+
+	"github.com/iScript/etcd-cr/raft/quorum"
+)
+
 type Config struct {
-	//Voters quorum.JointConfig
+	Voters quorum.JointConfig
 	// AutoLeave is true if the configuration is joint and a transition to the
 	// incoming configuration should be carried out automatically by Raft when
 	// this is possible. If false, the configuration will be joint until the
@@ -22,7 +29,7 @@ type Config struct {
 type ProgressTracker struct {
 	Config
 
-	//Progress ProgressMap
+	Progress ProgressMap
 
 	Votes map[uint64]bool
 
@@ -43,7 +50,7 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 		},
 		Votes: map[uint64]bool{}, //{}初始化一个空map
 
-		//Progress: map[uint64]*Progress{},
+		Progress: map[uint64]*Progress{},
 	}
 	return p
 }
@@ -51,4 +58,16 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 // 重置votes
 func (p *ProgressTracker) ResetVotes() {
 	p.Votes = map[uint64]bool{}
+}
+
+// VoterNodes returns a sorted slice of voters.
+func (p *ProgressTracker) VoterNodes() []uint64 {
+	m := p.Voters.IDs() //Voters继承Config
+	fmt.Println(m, "track.go")
+	nodes := make([]uint64, 0, len(m))
+	for id := range m {
+		nodes = append(nodes, id)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
+	return nodes
 }
