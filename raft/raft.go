@@ -378,6 +378,10 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
 }
 
+func (r *raft) Step(m pb.Message) error {
+	return nil
+}
+
 // 重置选举超时时间
 // 加随机数是因为如果防止2个节点同时过期而同时参与选举，一定程度防止选票不到半数而选举失败
 func (r *raft) resetRandomizedElectionTimeout() {

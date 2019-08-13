@@ -19,7 +19,7 @@ func (rn *RawNode) Bootstrap(peers []Peer) error {
 
 	rn.prevHardSt = emptyState //空的hardstate赋值给prev
 
-	rn.raft.becomeFollower(1, None)
+	rn.raft.becomeFollower(1, None) // 切换成follower，因为节点初次启动，任期号为1
 
 	return nil
 }

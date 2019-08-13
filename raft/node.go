@@ -32,46 +32,32 @@ func (a *SoftState) equal(b *SoftState) bool {
 	return a.Lead == b.Lead && a.RaftState == b.RaftState
 }
 
-// Ready encapsulates the entries and messages that are ready to read,
-// be saved to stable storage, committed or sent to other peers.
-// All fields in Ready are read-only.
+// Ready 封装了可以读取的信息，用于保存到存储中，或者提交或发送给其他节点
+// 这里所有的字段都是只读的
 type Ready struct {
-	// The current volatile state of a Node.
-	// SoftState will be nil if there is no update.
-	// It is not required to consume or store SoftState.
+
+	// SoftState 不稳定的状态，不需要存储
 	*SoftState
 
-	// The current state of a Node to be saved to stable storage BEFORE
-	// Messages are sent.
-	// HardState will be equal to empty state if there is no update.
+	//信息发送前稳定存储的状态
 	pb.HardState
 
-	// ReadStates can be used for node to serve linearizable read requests locally
-	// when its applied index is greater than the index in ReadState.
-	// Note that the readState will be returned when raft receives msgReadIndex.
-	// The returned is only valid for the request that requested to read.
+	// 当前节点等待处理的只读请求
 	ReadStates []ReadState
 
-	// Entries specifies entries to be saved to stable storage BEFORE
-	// Messages are sent.
+	// 从unstable中读取的entry
 	Entries []pb.Entry
 
-	// Snapshot specifies the snapshot to be saved to stable storage.
+	//待持久化的快照数据
 	Snapshot pb.Snapshot
 
-	// CommittedEntries specifies entries to be committed to a
-	// store/state-machine. These have previously been committed to stable
-	// store.
+	// 已经commit的entry数据
 	CommittedEntries []pb.Entry
 
-	// Messages specifies outbound messages to be sent AFTER Entries are
-	// committed to stable storage.
-	// If it contains a MsgSnap message, the application MUST report back to raft
-	// when the snapshot has been received or has failed by calling ReportSnapshot.
+	// 等待发送到其他节点的message消息
 	Messages []pb.Message
 
-	// MustSync indicates whether the HardState and Entries must be synchronously
-	// written to disk or if an asynchronous write is permissible.
+	// 是否必须同步写到硬盘
 	MustSync bool
 }
 
@@ -87,29 +73,19 @@ func IsEmptyHardState(st pb.HardState) bool {
 
 // Node 接口
 type Node interface {
-	// Tick increments the internal logical clock for the Node by a single tick. Election
-	// timeouts and heartbeat timeouts are in units of ticks.
+	//推进逻辑时钟，即选举计时器和心跳计时器
 	//Tick()
-	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+
+	// 选举计时器超时后会调用该方法，将当前节点切换成Candidate状态
 	//Campaign(ctx context.Context) error
-	// Propose proposes that data be appended to the log. Note that proposals can be lost without
-	// notice, therefore it is user's job to ensure proposal retries.
+
+	// 收到Client发来的写请求时，调用Propose方法进行处理
 	//Propose(ctx context.Context, data []byte) error
-	// ProposeConfChange proposes a configuration change. Like any proposal, the
-	// configuration change may be dropped with or without an error being
-	// returned. In particular, configuration changes are dropped unless the
-	// leader has certainty that there is no prior unapplied configuration
-	// change in its log.
-	//
-	// The method accepts either a pb.ConfChange (deprecated) or pb.ConfChangeV2
-	// message. The latter allows arbitrary configuration changes via joint
-	// consensus, notably including replacing a voter. Passing a ConfChangeV2
-	// message is only allowed if all Nodes participating in the cluster run a
-	// version of this library aware of the V2 API. See pb.ConfChangeV2 for
-	// usage details and semantics.
+
+	// 收到Client发送的修改集群配置的请求
 	//ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
 
-	// Step advances the state machine using the given message. ctx.Err() will be returned, if any.
+	// 收到其他节点的消息时，会通过该方法将消息交给底层封装的raft实例进行处理
 	//Step(ctx context.Context, msg pb.Message) error
 
 	// Ready returns a channel that returns the current point-in-time state.
@@ -170,7 +146,7 @@ type Peer struct {
 	Context []byte
 }
 
-// 通过config和peer启动一台node
+// 通过config和peer启动一台node （第二个参数记录了当前集群中全部节点的id）
 func StartNode(c *Config, peers []Peer) Node {
 	fmt.Println("raft.node.StartNode")
 
@@ -185,58 +161,113 @@ func StartNode(c *Config, peers []Peer) Node {
 	}
 	rn.Bootstrap(peers) //
 	n := newNode(rn)
-	//go n.run()
-	n.run() //调试
+	go n.run()
+	//n.run() //调试
 	return &n
 
 }
 
+func RestartNode(c *Config) Node {
+	rn, err := NewRawNode(c)
+	if err != nil {
+		panic(err)
+	}
+	n := newNode(rn)
+	go n.run()
+	return &n
+}
+
+//消息类型
+type msgWithResult struct {
+	m      pb.Message
+	result chan error
+}
+
 type node struct {
-	// propc      chan msgWithResult
-	// recvc      chan pb.Message
-	// confc      chan pb.ConfChangeV2
-	// confstatec chan pb.ConfState
-	// readyc     chan Ready
-	// advancec   chan struct{}
-	// tickc      chan struct{}
-	// done       chan struct{}
-	// stop       chan struct{}
-	// status     chan chan Status
+	propc      chan msgWithResult   // 该通道用于接收MsgProp类型的消息
+	recvc      chan pb.Message      // 除MsgProp外的其他类型的消息都由该通道接收
+	confc      chan pb.ConfChangeV2 // 当节点收到EntryConfChange类型的Entry记录时，会转换成confchange，并写入该通道中等待
+	confstatec chan pb.ConfState    // 该通道用于向上层模块返回ConfState实例
+	readyc     chan Ready           // 用于向上层模块返回ready实例
+	advancec   chan struct{}        // 上层模块处理完通过readyc获取的ready实例之后，会通过node.Advance方法向该通道写入信号，从而通知底层raft实例
+	tickc      chan struct{}        // 接收逻辑时钟发出的信号
+	done       chan struct{}        // done通道关闭后，进行相应的操作
+	stop       chan struct{}        // 当node.Stop方法被滴啊用时，会向该通道发送信息
+	status     chan chan Status     // 传递status
 
 	rn *RawNode
 }
 
+// 初始化node
 func newNode(rn *RawNode) node {
 	return node{
-		// propc:      make(chan msgWithResult),
-		// recvc:      make(chan pb.Message),
-		// confc:      make(chan pb.ConfChangeV2),
-		// confstatec: make(chan pb.ConfState),
-		// readyc:     make(chan Ready),
-		// advancec:   make(chan struct{}),
-		// make tickc a buffered chan, so raft node can buffer some ticks when the node
-		// is busy processing raft messages. Raft node will resume process buffered
-		// ticks when it becomes idle.
-		// tickc:  make(chan struct{}, 128),
-		// done:   make(chan struct{}),
-		// stop:   make(chan struct{}),
-		// status: make(chan chan Status),
-		rn: rn,
+		propc:      make(chan msgWithResult),
+		recvc:      make(chan pb.Message),
+		confc:      make(chan pb.ConfChangeV2),
+		confstatec: make(chan pb.ConfState),
+		readyc:     make(chan Ready),
+		advancec:   make(chan struct{}),
+		tickc:      make(chan struct{}, 128),
+		done:       make(chan struct{}),
+		stop:       make(chan struct{}),
+		status:     make(chan chan Status),
+		rn:         rn,
 	}
 }
 
+// 处理node中封装的全部通道
 func (n *node) run() {
-	// var readyc chan Ready
-	// var advancec chan struct{}
+	var propc chan msgWithResult
+	var readyc chan Ready
+	var advancec chan struct{}
+	var rd Ready
 
-	// for {
-	// 	if advancec != nil {
-	// 		readyc = nil
-	// 	} else if n.rn.HasReady() {
+	r := n.rn.raft
+	lead := None
 
-	// 		rd = n.rn.readyWithoutAccept()
-	// 		readyc = n.readyc
-	// 	}
+	for {
+		if advancec != nil {
+			readyc = nil
+		}
+		// else if n.rn.HasReady() {
 
-	// }
+		// 	rd = n.rn.readyWithoutAccept()
+		// 	readyc = n.readyc
+		// }
+
+		// r.lead 不为none
+		if lead != r.lead {
+			if r.hasLeader() {
+				if lead == None {
+					r.logger.Infof("raft.node: %x elected leader %x at term %d", r.id, r.lead, r.Term)
+				} else {
+					r.logger.Infof("raft.node: %x changed leader from %x to %x at term %d", r.id, lead, r.lead, r.Term)
+				}
+				propc = n.propc
+			} else {
+				r.logger.Infof("raft.node: %x lost leader %x at term %d", r.id, lead, r.Term)
+				propc = nil
+			}
+			lead = r.lead
+		}
+
+		select {
+		case pm := <-propc: //读取propc通道，获取MsgPropc消息，并交给raft.Step处理
+			m := pm.m
+			m.From = r.id
+			err := r.Step(m)
+			if pm.result != nil {
+				pm.result <- err
+				close(pm.result)
+			}
+		case readyc <- rd:
+			//n.rn.acceptReady(rd)
+			//advancec = n.advancec
+		case <-advancec:
+			// n.rn.Advance(rd)
+			// rd = Ready{}
+			// advancec = nil
+		}
+
+	}
 }

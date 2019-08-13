@@ -166,5 +166,5 @@ func (c *RaftCluster) SetStore(st v2store.Store) { //c.v2store = st
 
 func (c *RaftCluster) SetBackend(be backend.Backend) {
 	c.be = be
-	//mustCreateBackendBuckets(c.be)
+	// mustCreateBackendBuckets(c.be)  还没设置batchTx.tx , 无法创建
 }

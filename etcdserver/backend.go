@@ -1,7 +1,6 @@
 package etcdserver
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/iScript/etcd-cr/mvcc/backend"
@@ -52,8 +51,8 @@ func openBackend(cfg ServerConfig) backend.Backend {
 
 	//监听channel
 	select {
-	case be := <-beOpened: //如果通道中有传入
-		fmt.Println("opened")
+	case be := <-beOpened: //如果be接收到
+
 		if cfg.Logger != nil {
 			cfg.Logger.Info("opened backend db", zap.String("path", fn), zap.Duration("took", time.Since(now)))
 		}

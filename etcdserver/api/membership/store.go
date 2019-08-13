@@ -27,6 +27,7 @@ func mustCreateBackendBuckets(be backend.Backend) {
 	tx := be.BatchTx()
 	tx.Lock()
 	defer tx.Unlock()
+
 	// 创建库
 	tx.UnsafeCreateBucket(membersBucketName)
 	tx.UnsafeCreateBucket(membersRemovedBucketName)
