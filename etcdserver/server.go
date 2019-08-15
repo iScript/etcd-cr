@@ -6,11 +6,12 @@ import (
 	"math/rand"
 	"sync"
 	"time"
-	stats "github.com/iScript/etcd-cr/etcdserver/api/v2stats"
+
 	"github.com/coreos/go-semver/semver"
 	humanize "github.com/dustin/go-humanize"
 	"github.com/iScript/etcd-cr/etcdserver/api/membership"
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
+	stats "github.com/iScript/etcd-cr/etcdserver/api/v2state"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
@@ -168,8 +169,8 @@ type EtcdServer struct {
 	// authStore  auth.AuthStore
 	// alarmStore *v3alarm.AlarmStore
 
-	// stats  *stats.ServerStats
-	// lstats *stats.LeaderStats
+	stats  *stats.ServerStats
+	lstats *stats.LeaderStats
 
 	SyncTicker *time.Ticker
 	// compactor is used to auto-compact the KV.
@@ -206,7 +207,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		// w  *wal.WAL
 		// n  raft.Node
 		// s  *raft.MemoryStorage
-		// id types.ID
+		id types.ID
 		cl *membership.RaftCluster
 	)
 
@@ -290,7 +291,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 		//cl.SetStore(st)
 		cl.SetBackend(be)
-		startNode(cfg, cl, cl.MemberIDs())
+		id, _, _, _ = startNode(cfg, cl, cl.MemberIDs())
 
 	case haveWAL:
 		fmt.Println(333)
@@ -302,10 +303,10 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		return nil, fmt.Errorf("cannot access member directory: %v", terr)
 	}
 
-	sstats := stats.NewServerStats(cfg.Name, id.String())	//server的相关统计数据
-	lstats := stats.NewLeaderStats(id.String())				//如果是leader，leader相关的数据
+	sstats := stats.NewServerStats(cfg.Name, id.String()) //server的相关统计数据
+	lstats := stats.NewLeaderStats(id.String())           //如果是leader，leader相关的数据
 
-	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond	//100毫秒， TickMs在embed/config中定义，默认为100
+	//heartbeat := time.Duration(cfg.TickMs) * time.Millisecond //100毫秒， TickMs在embed/config中定义，默认为100
 	srv = &EtcdServer{
 		readych: make(chan struct{}),
 		Cfg:     cfg, //serverConfig
@@ -324,10 +325,10 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		// 		storage:     NewStorage(w, ss),
 		// 	},
 		// ),
-		cluster: cl,
-		stats:            sstats,
-		lstats:           lstats,
-		SyncTicker:       time.NewTicker(500 * time.Millisecond),	//同步ticker，500毫秒
+		cluster:    cl,
+		stats:      sstats,
+		lstats:     lstats,
+		SyncTicker: time.NewTicker(500 * time.Millisecond), //同步ticker，500毫秒
 	}
 
 	return nil, nil
