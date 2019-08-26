@@ -3,6 +3,7 @@ package etcdserver
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
 	stats "github.com/iScript/etcd-cr/etcdserver/api/v2state"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
+	"github.com/iScript/etcd-cr/lease"
+	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/wal"
@@ -70,45 +73,36 @@ func init() {
 	// )
 }
 
+type Response struct {
+	Term  uint64
+	Index uint64
+	// Event   *v2store.Event
+	// Watcher v2store.Watcher
+	Err error
+}
+
 type Server interface {
-	// AddMember attempts to add a member into the cluster. It will return
-	// ErrIDRemoved if member ID is removed from the cluster, or return
-	// ErrIDExists if member ID exists in the cluster.
+	//向当前etcd集群添加一个节点
 	//AddMember(ctx context.Context, memb membership.Member) ([]*membership.Member, error)
-	// RemoveMember attempts to remove a member from the cluster. It will
-	// return ErrIDRemoved if member ID is removed from the cluster, or return
-	// ErrIDNotFound if member ID is not in the cluster.
+
+	// 从当前集群删除一个节点
 	//RemoveMember(ctx context.Context, id uint64) ([]*membership.Member, error)
-	// UpdateMember attempts to update an existing member in the cluster. It will
-	// return ErrIDNotFound if the member ID does not exist.
+
+	// 修改集群成员属性
 	//UpdateMember(ctx context.Context, updateMemb membership.Member) ([]*membership.Member, error)
-	// PromoteMember attempts to promote a non-voting node to a voting node. It will
-	// return ErrIDNotFound if the member ID does not exist.
-	// return ErrLearnerNotReady if the member are not ready.
-	// return ErrMemberNotLearner if the member is not a learner.
+
+	// 无投票节点提升为有投票节点
 	//PromoteMember(ctx context.Context, id uint64) ([]*membership.Member, error)
 
-	// ClusterVersion is the cluster-wide minimum major.minor version.
-	// Cluster version is set to the min version that an etcd member is
-	// compatible with when first bootstrap.
 	//
-	// ClusterVersion is nil until the cluster is bootstrapped (has a quorum).
-	//
-	// During a rolling upgrades, the ClusterVersion will be updated
-	// automatically after a sync. (5 second by default)
-	//
-	// The API/raft component can utilize ClusterVersion to determine if
-	// it can accept a client request or a raft RPC.
-	// NOTE: ClusterVersion might be nil when etcd 2.1 works with etcd 2.0 and
-	// the leader is etcd 2.0. etcd 2.0 leader will not update clusterVersion since
-	// this feature is introduced post 2.0.
 	ClusterVersion() *semver.Version
+
 	// Cluster() api.Cluster
 	// Alarms() []*pb.AlarmMember
 }
 
 type EtcdServer struct {
-	// inflightSnapshots holds count the number of snapshots currently inflight.
+	// 当前已发出去但未收到响应的快照个数
 	inflightSnapshots int64  // must use atomic operations to access; keep 64-bit aligned.
 	appliedIndex      uint64 // must use atomic operations to access; keep 64-bit aligned.
 	committedIndex    uint64 // must use atomic operations to access; keep 64-bit aligned.
@@ -118,14 +112,14 @@ type EtcdServer struct {
 	// consistIndex used to hold the offset of current executing entry
 	// It is initialized to 0 before executing any entry.
 	consistIndex consistentIndex // must use atomic operations to access; keep 64-bit aligned.
-	//r            raftNode        // uses 64-bit atomics; keep 64-bit aligned.
+	//r            raftNode        // raftnode，是etcdserver实例与底层etcd-raft模块通信的桥梁
 
 	readych chan struct{}
 	Cfg     ServerConfig
 
 	lgMu *sync.RWMutex
 	lg   *zap.Logger
-	//w    wait.Wait
+	//w    wait.Wait	//负责协调后台多个goroutine之间的执行
 
 	readMu sync.RWMutex
 	// read routine notifies etcd server that it waits for reading by sending an empty struct to
@@ -145,40 +139,40 @@ type EtcdServer struct {
 	leaderChanged   chan struct{}
 	leaderChangedMu sync.RWMutex
 
-	errorc chan error
-	id     types.ID
-	//attributes membership.Attributes
+	errorc     chan error
+	id         types.ID
+	attributes membership.Attributes //记录当前节点的名称及接收集群中其他节点请求的url地址
 
 	cluster *membership.RaftCluster
 
 	v2store v2store.Store
-	// snapshotter *snap.Snapshotter
+	// snapshotter *snap.Snapshotter	//读写快照文件
 
-	// applyV2 ApplierV2
+	applyV2 ApplierV2
 
 	// // applyV3 is the applier with auth and quotas
 	// applyV3 applierV3
 	// // applyV3Base is the core applier without auth or quotas
 	// applyV3Base applierV3
-	// applyWait   wait.WaitTime
+	// applyWait   wait.WaitTime	//WaitTime是上面介绍的Wait之上的一层扩展。记录的id是有序的
 
-	// kv         mvcc.ConsistentWatchableKV
-	// lessor     lease.Lessor
+	// kv         mvcc.ConsistentWatchableKV	//v3版本的存储
+	lessor lease.Lessor
 	// bemu       sync.Mutex
-	// be         backend.Backend
-	// authStore  auth.AuthStore
-	// alarmStore *v3alarm.AlarmStore
+	be backend.Backend // 后端存储
+	// authStore  auth.AuthStore	// 在backend之上封装的一层存储，用于记录权限控制
+	// alarmStore *v3alarm.AlarmStore	// 在backend之上封装的一层存储，用于记录报警相关
 
 	stats  *stats.ServerStats
 	lstats *stats.LeaderStats
 
-	SyncTicker *time.Ticker
-	// compactor is used to auto-compact the KV.
-	//compactor v3compactor.Compactor
+	SyncTicker *time.Ticker // 控制Leader节点定期发送sync消息的频率
+
+	//compactor v3compactor.Compactor	// Leader节点会对存储进行定期压缩，该字段用于控制压缩频率。
 
 	// peerRt used to send requests (version, lease) to peers.
 	// peerRt   http.RoundTripper
-	// reqIDGen *idutil.Generator
+	// reqIDGen *idutil.Generator	// 用于生成请求的唯一标示
 
 	// forceVersionC is used to force the version monitor loop
 	// to detect the cluster version immediately.
@@ -186,9 +180,8 @@ type EtcdServer struct {
 
 	// wgMu blocks concurrent waitgroup mutation while server stopping
 	wgMu sync.RWMutex
-	// wg is used to wait for the go routines that depends on the server state
-	// to exit when stopping the server.
-	wg sync.WaitGroup
+
+	wg sync.WaitGroup // 通过该字段等待后台所有goroutine全部退出
 
 	// ctx is used for etcd-initiated requests that may need to be canceled
 	// on etcd server shutdown.
@@ -196,7 +189,7 @@ type EtcdServer struct {
 	cancel context.CancelFunc
 
 	leadTimeMu      sync.RWMutex
-	leadElectedTime time.Time
+	leadElectedTime time.Time // 记录当前节点最近一次转换成Leader状态的时间戳
 
 	//*AccessController
 }
@@ -233,6 +226,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	//member/wal中是否有.wal文件
 	haveWAL := wal.Exist(cfg.WALDir())
 
+	// 快照目录
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		if cfg.Logger != nil {
 			cfg.Logger.Fatal(
@@ -243,6 +237,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 	}
 
+	// 创建snapshotter实例，用来读写snap目录下的快照文件
 	//ss := snap.New(cfg.Logger, cfg.SnapDir())
 
 	//bepath := cfg.backendPath()
@@ -255,6 +250,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 	}()
 
+	// 创建roundtripper实例
 	prt, err := rafthttp.NewRoundTripper(cfg.PeerTLSInfo, cfg.peerDialTimeout())
 	if err != nil {
 		return nil, err
@@ -266,10 +262,11 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	// )
 
 	//fmt.Println(haveWAL, cfg.NewCluster) // 默认false true
+
 	switch {
-	case !haveWAL && !cfg.NewCluster:
+	case !haveWAL && !cfg.NewCluster: //没有wal文件且当前节点正在加入一个正在运行的节点
 		fmt.Println(111)
-	case !haveWAL && cfg.NewCluster:
+	case !haveWAL && cfg.NewCluster: //没有wal文件且当前集群是新建的
 		// 一些验证
 		if err = cfg.VerifyBootstrap(); err != nil {
 			return nil, err
@@ -293,7 +290,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		cl.SetBackend(be)
 		id, _, _, _ = startNode(cfg, cl, cl.MemberIDs())
 
-	case haveWAL:
+	case haveWAL: //存在wal文件
 		fmt.Println(333)
 	default:
 		return nil, fmt.Errorf("unsupported bootstrap config")
@@ -306,7 +303,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	sstats := stats.NewServerStats(cfg.Name, id.String()) //server的相关统计数据
 	lstats := stats.NewLeaderStats(id.String())           //如果是leader，leader相关的数据
 
-	//heartbeat := time.Duration(cfg.TickMs) * time.Millisecond //100毫秒， TickMs在embed/config中定义，默认为100
+	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond //100毫秒， TickMs在embed/config中定义，默认为100
 	srv = &EtcdServer{
 		readych: make(chan struct{}),
 		Cfg:     cfg, //serverConfig
@@ -331,5 +328,32 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		SyncTicker: time.NewTicker(500 * time.Millisecond), //同步ticker，500毫秒
 	}
 
+	//prometheus相关
+	//serverID.With(prometheus.Labels{"server_id": id.String()}).Set(1)
+
+	srv.applyV2 = &applierV2store{store: srv.v2store, cluster: srv.cluster}
+
+	srv.be = be //设置backend
+
+	minTTL := time.Duration((3*cfg.ElectionTicks)/2) * heartbeat // 1.5s
+
+	// 因为在store.restore中除了恢复内存索引，还会重新绑定键值对与对应的lease
+	// 先恢复lessor，再恢复kv
+	srv.lessor = lease.NewLessor(
+		srv.getLogger(),
+		srv.be,
+		lease.LessorConfig{
+			MinLeaseTTL:                int64(math.Ceil(minTTL.Seconds())),
+			CheckpointInterval:         cfg.LeaseCheckpointInterval,
+			ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
+		})
+
 	return nil, nil
+}
+
+func (s *EtcdServer) getLogger() *zap.Logger {
+	s.lgMu.RLock()
+	l := s.lg
+	s.lgMu.RUnlock()
+	return l
 }

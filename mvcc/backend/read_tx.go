@@ -6,13 +6,17 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// 只读事务接口
 type ReadTx interface {
 	Lock()
 	Unlock()
 	RLock()
 	RUnlock()
 
+	//在指定的bucket中进行范围查找
 	//UnsafeRange(bucketName []byte, key, endKey []byte, limit int64) (keys [][]byte, vals [][]byte)
+
+	// 遍历指定bucket中的全部键值对
 	//UnsafeForEach(bucketName []byte, visitor func(k, v []byte) error) error
 }
 
