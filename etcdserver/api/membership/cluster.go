@@ -123,6 +123,13 @@ func (c *RaftCluster) MemberIDs() []types.ID {
 	return ids
 }
 
+// 该id是否被移除
+func (c *RaftCluster) IsIDRemoved(id types.ID) bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.removed[id]
+}
+
 // 输出结构体时自动调用
 func (c *RaftCluster) String() string {
 	c.Lock()

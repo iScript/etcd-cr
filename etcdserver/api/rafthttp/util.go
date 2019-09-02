@@ -13,3 +13,8 @@ func NewRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http
 	// take long time to write out before reading out the response.
 	return transport.NewTimeoutTransport(tlsInfo, dialTimeout, 0, 0)
 }
+
+// 返回一个roundtripper用于stream 请求
+func newStreamRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http.RoundTripper, error) {
+	return transport.NewTimeoutTransport(tlsInfo, dialTimeout, ConnReadTimeout, ConnWriteTimeout)
+}

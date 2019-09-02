@@ -7,9 +7,16 @@ import (
 	"time"
 )
 
+/**
+http请求的过程中，最后都调用了http.Transport.RoundTrip()方法
+http.transport是RoundTripper接口的实现之一
+RoundTripper接口的RoundTrip()方法定义了一个http事务，即客户端发送request到服务端，服务端处理完成之后，返回相应的response的过程
+
+**/
+
 type unixTransport struct{ *http.Transport }
 
-// 返回http transport
+// 返回http transport ，实现了roundtripper接口
 // 并注册2个协议
 func NewTransport(info TLSInfo, dialtimeoutd time.Duration) (*http.Transport, error) {
 	cfg, err := info.ClientConfig()

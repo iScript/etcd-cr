@@ -12,12 +12,14 @@ import (
 	humanize "github.com/dustin/go-humanize"
 	"github.com/iScript/etcd-cr/etcdserver/api/membership"
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
-	stats "github.com/iScript/etcd-cr/etcdserver/api/v2state"
+	"github.com/iScript/etcd-cr/etcdserver/api/snap"
+	stats "github.com/iScript/etcd-cr/etcdserver/api/v2stats"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
 	"github.com/iScript/etcd-cr/lease"
 	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
+	"github.com/iScript/etcd-cr/raft"
 	"github.com/iScript/etcd-cr/wal"
 	"go.uber.org/zap"
 )
@@ -112,7 +114,7 @@ type EtcdServer struct {
 	// consistIndex used to hold the offset of current executing entry
 	// It is initialized to 0 before executing any entry.
 	consistIndex consistentIndex // must use atomic operations to access; keep 64-bit aligned.
-	//r            raftNode        // raftnode，是etcdserver实例与底层etcd-raft模块通信的桥梁
+	r            raftNode        // raftnode，是etcdserver实例与底层etcd-raft模块通信的桥梁
 
 	readych chan struct{}
 	Cfg     ServerConfig
@@ -197,9 +199,9 @@ type EtcdServer struct {
 func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 
 	var (
-		// w  *wal.WAL
-		// n  raft.Node
-		// s  *raft.MemoryStorage
+		w  *wal.WAL
+		n  raft.Node
+		s  *raft.MemoryStorage
 		id types.ID
 		cl *membership.RaftCluster
 	)
@@ -238,7 +240,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 
 	// 创建snapshotter实例，用来读写snap目录下的快照文件
-	//ss := snap.New(cfg.Logger, cfg.SnapDir())
+	ss := snap.New(cfg.Logger, cfg.SnapDir())
 
 	//bepath := cfg.backendPath()
 	//beExist := fileutil.Exist(bepath)
@@ -256,10 +258,10 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		return nil, err
 	}
 
-	// var (
-	// 	remotes  []*membership.Member
-	// 	snapshot *raftpb.Snapshot
-	// )
+	var (
+		remotes []*membership.Member
+	//	snapshot *raftpb.Snapshot
+	)
 
 	//fmt.Println(haveWAL, cfg.NewCluster) // 默认false true
 
@@ -288,7 +290,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 		//cl.SetStore(st)
 		cl.SetBackend(be)
-		id, _, _, _ = startNode(cfg, cl, cl.MemberIDs())
+		id, n, s, w = startNode(cfg, cl, cl.MemberIDs())
 
 	case haveWAL: //存在wal文件
 		fmt.Println(333)
@@ -312,16 +314,16 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		errorc:  make(chan error, 1),
 		//v2store: st,
 		//snapshotter: ss,  etcdserver/api/snap
-		// r: *newRaftNode(
-		// 	raftNodeConfig{
-		// 		lg:          cfg.Logger,
-		// 		isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
-		// 		Node:        n,
-		// 		heartbeat:   heartbeat,
-		// 		raftStorage: s,
-		// 		storage:     NewStorage(w, ss),
-		// 	},
-		// ),
+		r: *newRaftNode(
+			raftNodeConfig{
+				lg:          cfg.Logger,
+				isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
+				Node:        n,
+				heartbeat:   heartbeat,
+				raftStorage: s,
+				storage:     NewStorage(w, ss),
+			},
+		),
 		cluster:    cl,
 		stats:      sstats,
 		lstats:     lstats,
@@ -348,7 +350,38 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
 		})
 
-	return nil, nil
+	tr := &rafthttp.Transport{
+		Logger:      cfg.Logger,
+		TLSInfo:     cfg.PeerTLSInfo,
+		DialTimeout: cfg.peerDialTimeout(),
+		ID:          id,
+		URLs:        cfg.PeerURLs,
+		ClusterID:   cl.ID(),
+		Raft:        srv, //srv需要实现Raft的几个接口
+		//Snapshotter: ss,
+		ServerStats: sstats,
+		LeaderStats: lstats,
+		ErrorC:      srv.errorc,
+	}
+	if err = tr.Start(); err != nil {
+		return nil, err
+	}
+
+	for _, m := range remotes {
+		if m.ID != id {
+			tr.AddRemote(m.ID, m.PeerURLs)
+		}
+	}
+
+	for _, m := range cl.Members() {
+		if m.ID != id {
+			tr.AddPeer(m.ID, m.PeerURLs)
+		}
+	}
+	//srv.r.transport = tr
+
+	return srv, nil
+
 }
 
 func (s *EtcdServer) getLogger() *zap.Logger {

@@ -6,10 +6,7 @@ import (
 	"time"
 )
 
-// NewTimeoutTransport returns a transport created using the given TLS info.
-// If read/write on the created connection blocks longer than its time limit,
-// it will return timeout error.
-// If read/write timeout is set, transport will not be able to reuse connection.
+// 返回transport， transport实现了roundtripper接口
 func NewTimeoutTransport(info TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.Duration) (*http.Transport, error) {
 	tr, err := NewTransport(info, dialtimeoutd) // 返回http/transport
 	if err != nil {

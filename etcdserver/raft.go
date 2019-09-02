@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/iScript/etcd-cr/etcdserver/api/membership"
+	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
+	"github.com/iScript/etcd-cr/pkg/contention"
 	"github.com/iScript/etcd-cr/pkg/logutil"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/raft"
+	"github.com/iScript/etcd-cr/raft/raftpb"
 	"github.com/iScript/etcd-cr/wal"
 	"go.uber.org/zap"
 )
@@ -35,29 +39,81 @@ var (
 	//raftStatus func() raft.Status
 )
 
-// type raftNode struct {
-// 	lg *zap.Logger
+type apply struct {
+	entries  []raftpb.Entry
+	snapshot raftpb.Snapshot
+	// notifyc synchronizes etcd server applies with the raft node
+	notifyc chan struct{}
+}
 
-// 	tickMu *sync.Mutex
-// 	raftNodeConfig
+type raftNode struct {
+	lg *zap.Logger
 
-// 	// a chan to send/receive snapshot
-// 	msgSnapC chan raftpb.Message
+	tickMu *sync.Mutex
+	raftNodeConfig
 
-// 	// a chan to send out apply
-// 	applyc chan apply
+	// a chan to send/receive snapshot
+	msgSnapC chan raftpb.Message
 
-// 	// a chan to send out readState
-// 	readStateC chan raft.ReadState
+	// a chan to send out apply
+	applyc chan apply
 
-// 	// utility
-// 	ticker *time.Ticker
-// 	// contention detectors for raft heartbeat message
-// 	td *contention.TimeoutDetector
+	// a chan to send out readState
+	readStateC chan raft.ReadState
 
-// 	stopped chan struct{}
-// 	done    chan struct{}
-// }
+	// utility
+	ticker *time.Ticker
+
+	td *contention.TimeoutDetector
+
+	stopped chan struct{}
+	done    chan struct{}
+}
+
+type raftNodeConfig struct {
+	lg *zap.Logger
+
+	isIDRemoved func(id uint64) bool //检测接收者是否已经从集群中删除
+	raft.Node
+	raftStorage *raft.MemoryStorage
+	storage     Storage
+	heartbeat   time.Duration // for logging
+	transport   rafthttp.Transporter
+}
+
+func newRaftNode(cfg raftNodeConfig) *raftNode {
+	var lg raft.Logger
+	if cfg.lg != nil {
+		lg = logutil.NewRaftLoggerZap(cfg.lg)
+	} else {
+		lcfg := logutil.DefaultZapLoggerConfig
+		var err error
+		lg, err = logutil.NewRaftLogger(&lcfg)
+		if err != nil {
+			log.Fatalf("cannot create raft logger %v", err)
+		}
+	}
+	raft.SetLogger(lg)
+	r := &raftNode{
+		lg:             cfg.lg,
+		tickMu:         new(sync.Mutex),
+		raftNodeConfig: cfg,
+
+		td:         contention.NewTimeoutDetector(2 * cfg.heartbeat),
+		readStateC: make(chan raft.ReadState, 1),
+		msgSnapC:   make(chan raftpb.Message, maxInFlightMsgSnap),
+		applyc:     make(chan apply),
+		stopped:    make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+	if r.heartbeat == 0 {
+		r.ticker = &time.Ticker{}
+	} else {
+		r.ticker = time.NewTicker(r.heartbeat)
+	}
+	return r
+	return nil
+}
 
 //func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
 func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
