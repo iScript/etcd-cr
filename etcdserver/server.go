@@ -19,7 +19,9 @@ import (
 	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
+	"github.com/iScript/etcd-cr/pkg/wait"
 	"github.com/iScript/etcd-cr/raft"
+	"github.com/iScript/etcd-cr/version"
 	"github.com/iScript/etcd-cr/wal"
 	"go.uber.org/zap"
 )
@@ -27,11 +29,6 @@ import (
 const (
 	DefaultSnapshotCount = 100000
 
-	// DefaultSnapshotCatchUpEntries is the number of entries for a slow follower
-	// to catch-up after compacting the raft storage entries.
-	// We expect the follower has a millisecond level latency with the leader.
-	// The max throughput is around 10K. Keep a 5K entries is enough for helping
-	// follower to catch up.
 	DefaultSnapshotCatchUpEntries uint64 = 5000
 
 	StoreClusterPrefix = "/0"
@@ -121,15 +118,14 @@ type EtcdServer struct {
 
 	lgMu *sync.RWMutex
 	lg   *zap.Logger
-	//w    wait.Wait	//负责协调后台多个goroutine之间的执行
+	w    wait.Wait //负责协调后台多个goroutine之间的执行
 
 	readMu sync.RWMutex
 	// read routine notifies etcd server that it waits for reading by sending an empty struct to
 	// readwaitC
 	readwaitc chan struct{}
-	// readNotifier is used to notify the read routine that it can process the request
-	// when there is no error
-	//readNotifier *notifier
+	// 通知read协程可以处理请求
+	readNotifier *notifier
 
 	// stop signals the run goroutine should shutdown.
 	stop chan struct{}
@@ -156,7 +152,7 @@ type EtcdServer struct {
 	// applyV3 applierV3
 	// // applyV3Base is the core applier without auth or quotas
 	// applyV3Base applierV3
-	// applyWait   wait.WaitTime	//WaitTime是上面介绍的Wait之上的一层扩展。记录的id是有序的
+	applyWait wait.WaitTime //WaitTime是上面介绍的Wait之上的一层扩展。记录的id是有序的
 
 	// kv         mvcc.ConsistentWatchableKV	//v3版本的存储
 	lessor lease.Lessor
@@ -378,7 +374,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			tr.AddPeer(m.ID, m.PeerURLs)
 		}
 	}
-	//srv.r.transport = tr
+	srv.r.transport = tr
 
 	return srv, nil
 
@@ -390,3 +386,102 @@ func (s *EtcdServer) getLogger() *zap.Logger {
 	s.lgMu.RUnlock()
 	return l
 }
+
+//Server初始化开始处理请求
+func (s *EtcdServer) Start() {
+	s.start()
+	// s.goAttach(func() { s.adjustTicks() })
+	// s.goAttach(func() { s.publish(s.Cfg.ReqTimeout()) })
+	// s.goAttach(s.purgeFile)
+	// s.goAttach(func() { monitorFileDescriptor(s.getLogger(), s.stopping) })
+	// s.goAttach(s.monitorVersions)
+	// s.goAttach(s.linearizableReadLoop)
+	// s.goAttach(s.monitorKVHash)
+}
+
+func (s *EtcdServer) start() {
+	//fmt.Println("etcdserver start")
+
+	lg := s.getLogger()
+
+	// 默认上面定义的10000
+	if s.Cfg.SnapshotCount == 0 {
+		if lg != nil {
+			lg.Info(
+				"updating snapshot-count to default",
+				zap.Uint64("given-snapshot-count", s.Cfg.SnapshotCount),
+				zap.Uint64("updated-snapshot-count", DefaultSnapshotCount),
+			)
+		}
+		s.Cfg.SnapshotCount = DefaultSnapshotCount
+	}
+	if s.Cfg.SnapshotCatchUpEntries == 0 {
+		if lg != nil {
+			lg.Info(
+				"updating snapshot catch-up entries to default",
+				zap.Uint64("given-snapshot-catchup-entries", s.Cfg.SnapshotCatchUpEntries),
+				zap.Uint64("updated-snapshot-catchup-entries", DefaultSnapshotCatchUpEntries),
+			)
+		}
+		s.Cfg.SnapshotCatchUpEntries = DefaultSnapshotCatchUpEntries
+	}
+
+	s.w = wait.New()
+	s.applyWait = wait.NewTimeList()
+	s.done = make(chan struct{})
+	s.stop = make(chan struct{})
+	s.stopping = make(chan struct{})
+
+	//context.Background函数的返回Context树的根节点
+	//func WithCancel(parent Context) 根据父节点 返回子节点和cancel function
+	//s.ctx传入goroutine中，通过s.cancel取消该goroutine
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+
+	// 第二个参数size，带缓存的channel，该通道最多可以暂存size个元素值，当发送第size +1个元素值后, 才会阻塞
+	// 若没设置2参数或0，接收channel前一直被阻塞着，直到向channel发消息
+	s.readwaitc = make(chan struct{}, 1)
+	s.readNotifier = newNotifier()
+	//特殊的struct{}类型的channel，它不能被写入任何数据，只有通过close()函数进行关闭操作，才能进行输出操作
+	s.leaderChanged = make(chan struct{})
+
+	// fmt.Println(s.ClusterVersion(), s.cluster)
+	// nil
+	if s.ClusterVersion() != nil {
+		if lg != nil {
+			lg.Info(
+				"starting etcd server",
+				zap.String("local-member-id", s.ID().String()),
+				zap.String("local-server-version", version.Version),
+				//zap.String("cluster-id", s.Cluster().ID().String()),
+				zap.String("cluster-version", version.Cluster(s.ClusterVersion().String())),
+			)
+		}
+		//membership.ClusterVersionMetrics.With(prometheus.Labels{"cluster_version": s.ClusterVersion().String()}).Set(1)
+	} else {
+		if lg != nil {
+			lg.Info(
+				"starting etcd server",
+				zap.String("local-member-id", s.ID().String()),
+				zap.String("local-server-version", version.Version),
+				zap.String("cluster-version", "to_be_decided"),
+			)
+		}
+	}
+
+	go s.run()
+}
+
+func (s *EtcdServer) run() {
+	//lg := s.getLogger()
+
+}
+
+func (s *EtcdServer) ClusterVersion() *semver.Version {
+	if s.cluster == nil {
+		return nil
+	}
+	return s.cluster.Version()
+}
+
+//
+func (s *EtcdServer) ID() types.ID { return s.id }

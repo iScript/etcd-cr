@@ -158,6 +158,20 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return e, err
 	}
 
+	//e.errc = make(chan error, len(e.Peers)+len(e.Clients)+2*len(e.sctxs))
+
+	//第一次初始化为false
+	if memberInitialized {
+		// if err = e.Server.CheckInitialHashKV(); err != nil {
+		// 	// set "EtcdServer" to nil, so that it does not block on "EtcdServer.Close()"
+		// 	// (nothing to close since rafthttp transports have not been started)
+		// 	e.Server = nil
+		// 	return e, err
+		// }
+	}
+
+	e.Server.Start()
+
 	return e, nil
 }
 

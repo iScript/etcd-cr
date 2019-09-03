@@ -30,7 +30,7 @@ type RaftCluster struct {
 	//v2store v2store.Store
 	be backend.Backend
 
-	sync.Mutex // guards the fields below
+	sync.Mutex // 互斥锁
 	version    *semver.Version
 	members    map[types.ID]*Member
 	// removed contains the ids of removed members in the cluster.
@@ -174,4 +174,14 @@ func (c *RaftCluster) SetStore(st v2store.Store) { //c.v2store = st
 func (c *RaftCluster) SetBackend(be backend.Backend) {
 	c.be = be
 	// mustCreateBackendBuckets(c.be)  还没设置batchTx.tx , 无法创建
+}
+
+func (c *RaftCluster) Version() *semver.Version {
+	c.Lock()
+	defer c.Unlock()
+	if c.version == nil {
+		//fmt.Println("c.versioin nil")
+		return nil
+	}
+	return semver.Must(semver.NewVersion(c.version.String()))
 }

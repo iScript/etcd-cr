@@ -8,7 +8,6 @@ import (
 	stats "github.com/iScript/etcd-cr/etcdserver/api/v2stats"
 	"github.com/iScript/etcd-cr/pkg/transport"
 	"github.com/iScript/etcd-cr/pkg/types"
-	"github.com/iScript/etcd-cr/raft/raftpb"
 
 	"github.com/xiang90/probing"
 	"go.uber.org/zap"
@@ -25,30 +24,30 @@ type Raft interface {
 type Transporter interface {
 
 	// 初始化操作
-	Start() error
+	//Start() error
 
 	// handle实例
-	Handler() http.Handler
+	//Handler() http.Handler
 
 	// 发送消息
-	Send(m []raftpb.Message)
+	// Send(m []raftpb.Message)
 
-	// 发送快照
-	//SendSnapshot(m snap.Message)
+	// // 发送快照
+	// //SendSnapshot(m snap.Message)
 
-	// 在集群中添加一个节点时，其他节点会通过该方法添加该新加入节点的信息
-	AddRemote(id types.ID, urls []string)
+	// // 在集群中添加一个节点时，其他节点会通过该方法添加该新加入节点的信息
+	// AddRemote(id types.ID, urls []string)
 
-	// 对peer的相关操作，Peer接口是当前节点对集群中其他节点的抽象表示
-	AddPeer(id types.ID, urls []string)
-	RemovePeer(id types.ID)
-	RemoveAllPeers()
-	UpdatePeer(id types.ID, urls []string)
-	ActiveSince(id types.ID) time.Time
-	ActivePeers() int
+	// // 对peer的相关操作，Peer接口是当前节点对集群中其他节点的抽象表示
+	// AddPeer(id types.ID, urls []string)
+	// RemovePeer(id types.ID)
+	// RemoveAllPeers()
+	// UpdatePeer(id types.ID, urls []string)
+	// ActiveSince(id types.ID) time.Time
+	// ActivePeers() int
 
-	// 关闭操作，该方法会关闭全部的网络链接
-	Stop()
+	// // 关闭操作，该方法会关闭全部的网络链接
+	// Stop()
 }
 
 // 是Transporter接口的具体实现
