@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver"
 	"github.com/iScript/etcd-cr/etcdserver/api/etcdhttp"
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
+	"github.com/iScript/etcd-cr/etcdserver/api/v3rpc"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/version"
 	"go.uber.org/zap"
@@ -295,18 +297,19 @@ func (e *Etcd) servePeers() (err error) {
 	ph := etcdhttp.NewPeerHandler(e.GetLogger(), e.Server) // 返回http handle
 	fmt.Println(ph)
 
-	// var peerTLScfg *tls.Config
-	// if !e.cfg.PeerTLSInfo.Empty() { //PeerTLSInfo => pkg/transport.TLSInfo
-	// 	if peerTLScfg, err = e.cfg.PeerTLSInfo.ServerConfig(); err != nil {
-	// 		return err
-	// 	}
-	// }
+	var peerTLScfg *tls.Config
+	if !e.cfg.PeerTLSInfo.Empty() { //PeerTLSInfo => pkg/transport.TLSInfo
+		// if peerTLScfg, err = e.cfg.PeerTLSInfo.ServerConfig(); err != nil {
+		// 	return err
+		// }
+	}
 
 	//循环Peers  （peerListener struct）
 	for _, p := range e.Peers {
 		//fmt.Println(p, 232323)
 		u := p.Listener.Addr().String() // url  127.0.0.1:2380
-		fmt.Println(u, "uuu")
+		gs := v3rpc.Server(e.Server, peerTLScfg)
+		fmt.Println(u, gs, "uuu")
 	}
 
 	return nil
