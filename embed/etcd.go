@@ -10,6 +10,8 @@ import (
 
 	"github.com/coreos/pkg/capnslog"
 	"github.com/iScript/etcd-cr/etcdserver"
+	"github.com/iScript/etcd-cr/etcdserver/api/etcdhttp"
+	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/version"
 	"go.uber.org/zap"
@@ -80,9 +82,9 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		)
 	}
 
-	// if e.Peers, err = configurePeerListeners(cfg); err != nil {
-	// 	return e, err
-	// }
+	if e.Peers, err = configurePeerListeners(cfg); err != nil {
+		return e, err
+	}
 
 	if e.cfg.logger != nil {
 		e.cfg.logger.Info(
@@ -172,9 +174,14 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	e.Server.Start()
 
+	if err = e.servePeers(); err != nil {
+		return e, err
+	}
+
 	return e, nil
 }
 
+// 输出etcd server相关信息
 func print(lg *zap.Logger, ec Config, sc etcdserver.ServerConfig, memberInitialized bool) {
 	lg.Info(
 		"starting an etcd server",
@@ -205,6 +212,110 @@ func print(lg *zap.Logger, ec Config, sc etcdserver.ServerConfig, memberInitiali
 	)
 }
 
-// func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
+// 返回当前配置
+func (e *Etcd) Config() Config {
+	return e.cfg
+}
 
-// }
+func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
+	if err = updateCipherSuites(&cfg.PeerTLSInfo, cfg.CipherSuites); err != nil {
+		return nil, err
+	}
+
+	if err = cfg.PeerSelfCert(); err != nil {
+		if cfg.logger != nil {
+			cfg.logger.Fatal("failed to get peer self-signed certs", zap.Error(err))
+		}
+	}
+
+	if !cfg.PeerTLSInfo.Empty() {
+		if cfg.logger != nil {
+			cfg.logger.Info(
+				"starting with peer TLS",
+				zap.String("tls-info", fmt.Sprintf("%+v", cfg.PeerTLSInfo)),
+				zap.Strings("cipher-suites", cfg.CipherSuites),
+			)
+		}
+	}
+
+	// LPUrls为url.URL类型 默认为DefaultListenPeerURLs="http://localhost:2380"
+	// 创建切片
+	peers = make([]*peerListener, len(cfg.LPUrls))
+	defer func() {
+		if err == nil {
+			return
+		}
+		for i := range peers {
+			if peers[i] != nil && peers[i].close != nil {
+				if cfg.logger != nil {
+					cfg.logger.Warn(
+						"closing peer listener",
+						zap.String("address", cfg.LPUrls[i].String()),
+						zap.Error(err),
+					)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				peers[i].close(ctx)
+				cancel()
+			}
+		}
+	}()
+
+	for i, u := range cfg.LPUrls {
+		// 如果是http
+		if u.Scheme == "http" {
+			//忽略key和cert
+			if !cfg.PeerTLSInfo.Empty() {
+				if cfg.logger != nil {
+					cfg.logger.Warn("scheme is HTTP while key and cert files are present; ignoring key and cert files", zap.String("peer-url", u.String()))
+				}
+			}
+			// 忽略cert auth
+			if cfg.PeerTLSInfo.ClientCertAuth {
+				if cfg.logger != nil {
+					cfg.logger.Warn("scheme is HTTP while --peer-client-cert-auth is enabled; ignoring client cert auth for this URL", zap.String("peer-url", u.String()))
+				}
+			}
+		}
+
+		peers[i] = &peerListener{close: func(context.Context) error { return nil }}
+		peers[i].Listener, err = rafthttp.NewListener(u, &cfg.PeerTLSInfo) // 返回 net.Listen("xxx", xxx)
+		if err != nil {
+			return nil, err
+		}
+		peers[i].close = func(context.Context) error {
+			return peers[i].Listener.Close()
+		}
+	}
+
+	return peers, nil
+}
+
+func (e *Etcd) servePeers() (err error) {
+	ph := etcdhttp.NewPeerHandler(e.GetLogger(), e.Server) // 返回http handle
+	fmt.Println(ph)
+
+	// var peerTLScfg *tls.Config
+	// if !e.cfg.PeerTLSInfo.Empty() { //PeerTLSInfo => pkg/transport.TLSInfo
+	// 	if peerTLScfg, err = e.cfg.PeerTLSInfo.ServerConfig(); err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	//循环Peers  （peerListener struct）
+	for _, p := range e.Peers {
+		//fmt.Println(p, 232323)
+		u := p.Listener.Addr().String() // url  127.0.0.1:2380
+		fmt.Println(u, "uuu")
+	}
+
+	return nil
+}
+
+// 返回logger
+func (e *Etcd) GetLogger() *zap.Logger {
+	e.cfg.loggerMu.RLock()
+	l := e.cfg.logger
+	e.cfg.loggerMu.RUnlock()
+	return l
+}

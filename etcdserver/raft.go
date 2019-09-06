@@ -115,7 +115,28 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 	return nil
 }
 
-//func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
+// raft.Node does not have locks in Raft package
+// func (r *raftNode) tick() {
+// 	r.tickMu.Lock()
+// 	r.Tick()
+// 	r.tickMu.Unlock()
+// }
+
+// 在一个新的goroutine中启动raftnode
+// 在etcdserver run()中调用
+func (r *raftNode) start(rh *raftReadyHandler) {
+	//internalTimeout := time.Second //1s
+
+	go func() {
+		//...
+	}()
+}
+
+func (r *raftNode) apply() chan apply {
+	return r.applyc
+}
+
+//
 func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
 	fmt.Println("start Node")
 	var err error

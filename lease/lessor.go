@@ -94,7 +94,7 @@ type Lessor interface {
 	// Leases() []*Lease
 
 	// // ExpiredLeasesC returns a chan that is used to receive expired leases.
-	// ExpiredLeasesC() <-chan []*Lease
+	ExpiredLeasesC() <-chan []*Lease
 
 	// // Recover recovers the lessor state from the given backend and RangeDeleter.
 	// Recover(b backend.Backend, rd RangeDeleter)
@@ -204,4 +204,8 @@ type Lease struct {
 
 type LeaseItem struct {
 	Key string
+}
+
+func (le *lessor) ExpiredLeasesC() <-chan []*Lease {
+	return le.expiredC
 }

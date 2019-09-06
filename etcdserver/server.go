@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-semver/semver"
@@ -21,6 +23,7 @@ import (
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/pkg/wait"
 	"github.com/iScript/etcd-cr/raft"
+	"github.com/iScript/etcd-cr/raft/raftpb"
 	"github.com/iScript/etcd-cr/version"
 	"github.com/iScript/etcd-cr/wal"
 	"go.uber.org/zap"
@@ -80,6 +83,16 @@ type Response struct {
 	Err error
 }
 
+type ServerV2 interface {
+	Server
+	Leader() types.ID
+
+	// Do takes a V2 request and attempts to fulfill it, returning a Response.
+	// Do(ctx context.Context, r pb.Request) (Response, error)
+	// stats.Stats
+	// ClientCertAuthEnabled() bool
+}
+
 type Server interface {
 	//向当前etcd集群添加一个节点
 	//AddMember(ctx context.Context, memb membership.Member) ([]*membership.Member, error)
@@ -107,10 +120,9 @@ type EtcdServer struct {
 	committedIndex    uint64 // must use atomic operations to access; keep 64-bit aligned.
 	term              uint64 // must use atomic operations to access; keep 64-bit aligned.
 	lead              uint64 // must use atomic operations to access; keep 64-bit aligned.
+	// 底层的原子级内存操作，其执行过程不能被中断，这也就保证了同一时刻一个线程的执行不会被其他线程中断，也保证了多线程下数据操作的一致性。
 
-	// consistIndex used to hold the offset of current executing entry
-	// It is initialized to 0 before executing any entry.
-	consistIndex consistentIndex // must use atomic operations to access; keep 64-bit aligned.
+	consistIndex consistentIndex // 当前执行entry的index
 	r            raftNode        // raftnode，是etcdserver实例与底层etcd-raft模块通信的桥梁
 
 	readych chan struct{}
@@ -387,10 +399,16 @@ func (s *EtcdServer) getLogger() *zap.Logger {
 	return l
 }
 
+func (s *EtcdServer) adjustTicks() {
+	fmt.Println("adjustTicks")
+}
+
 //Server初始化开始处理请求
 func (s *EtcdServer) Start() {
 	s.start()
-	// s.goAttach(func() { s.adjustTicks() })
+
+	//开启几个协程
+	s.goAttach(func() { s.adjustTicks() })
 	// s.goAttach(func() { s.publish(s.Cfg.ReqTimeout()) })
 	// s.goAttach(s.purgeFile)
 	// s.goAttach(func() { monitorFileDescriptor(s.getLogger(), s.stopping) })
@@ -471,9 +489,170 @@ func (s *EtcdServer) start() {
 	go s.run()
 }
 
-func (s *EtcdServer) run() {
-	//lg := s.getLogger()
+func (s *EtcdServer) purgeFile() {}
 
+//func (s *EtcdServer) Cluster() api.Cluster { return s.cluster }
+
+func (s *EtcdServer) ApplyWait() <-chan struct{} { return s.applyWait.Wait(s.getCommittedIndex()) }
+
+type ServerPeer interface {
+	ServerV2
+	RaftHandler() http.Handler
+	LeaseHandler() http.Handler
+}
+
+func (s *EtcdServer) LeaseHandler() http.Handler {
+	if s.lessor == nil {
+		return nil
+	}
+	return nil
+	//
+	//return leasehttp.NewHandler(s.lessor, s.ApplyWait)
+}
+
+// RaftHandle 返回 raftnode -> transport(api/rafthttp.Transporter) ->Handle
+func (s *EtcdServer) RaftHandler() http.Handler { return s.r.transport.Handler() }
+
+type etcdProgress struct {
+	confState raftpb.ConfState
+	snapi     uint64
+	appliedt  uint64
+	appliedi  uint64
+}
+
+// 方法用于被raftnode调用
+// 使逻辑与raft算法分离
+type raftReadyHandler struct {
+	getLead              func() (lead uint64)
+	updateLead           func(lead uint64)
+	updateLeadership     func(newLeader bool)
+	updateCommittedIndex func(uint64)
+}
+
+func (s *EtcdServer) run() {
+	lg := s.getLogger()
+	_, err := s.r.raftStorage.Snapshot() // raft/storage MemoryStorage
+
+	if err != nil {
+		if lg != nil {
+			lg.Panic("failed to get snapshot from Raft storage", zap.Error(err))
+		}
+	}
+
+	//sched := schedule.NewFIFOScheduler()	// FIFO调度器
+
+	// var (
+	// 	smu   sync.RWMutex
+	// 	syncC <-chan time.Time
+	// )
+
+	//设置发送sync消息的定时器
+	// setSyncC := func(ch <-chan time.Time) {
+	// 	smu.Lock()
+	// 	syncC = ch
+	// 	smu.Unlock()
+	// }
+	// getSyncC := func() (ch <-chan time.Time) {
+	// 	smu.RLock()
+	// 	ch = syncC
+	// 	smu.RUnlock()
+	// 	return
+	// }
+
+	rh := &raftReadyHandler{
+		getLead:    func() (lead uint64) { return s.getLead() },
+		updateLead: func(lead uint64) { s.setLead(lead) },
+
+		// raftnode在处理etcd-raft模块返回的Ready.SoftState字段时，会调用该方法
+		updateLeadership: func(newLeader bool) {
+			// if !s.isLeader() {
+			// 	if s.lessor != nil {
+			// 		s.lessor.Demote()
+			// 	}
+			// 	if s.compactor != nil {
+			// 		s.compactor.Pause()
+			// 	}
+			// 	setSyncC(nil)
+			// } else {
+			// 	if newLeader {
+			// 		t := time.Now()
+			// 		s.leadTimeMu.Lock()
+			// 		s.leadElectedTime = t
+			// 		s.leadTimeMu.Unlock()
+			// 	}
+			// 	setSyncC(s.SyncTicker.C)
+			// 	if s.compactor != nil {
+			// 		s.compactor.Resume()
+			// 	}
+			// }
+			// if newLeader {
+			// 	s.leaderChangedMu.Lock()
+			// 	lc := s.leaderChanged
+			// 	s.leaderChanged = make(chan struct{})
+			// 	close(lc)
+			// 	s.leaderChangedMu.Unlock()
+			// }
+
+			// if s.stats != nil {
+			// 	s.stats.BecomeLeader()
+			// }
+		},
+		// raftnode处理apply实例时会调用该方法
+		updateCommittedIndex: func(ci uint64) {
+			cci := s.getCommittedIndex()
+			if ci > cci {
+				s.setCommittedIndex(ci)
+			}
+		},
+	}
+
+	s.r.start(rh)
+
+	//记录当前快照相关的元数据信息和已应用entry记录的位置信息
+	// ep := etcdProgress{
+	// 	confState: sn.Metadata.ConfState,
+	// 	snapi:     sn.Metadata.Index,
+	// 	appliedt:  sn.Metadata.Term,
+	// 	appliedi:  sn.Metadata.Index,
+	// }
+
+	defer func() {
+		s.wgMu.Lock() // block concurrent waitgroup adds in goAttach while stopping
+		close(s.stopping)
+		s.wgMu.Unlock()
+		s.cancel()
+
+		//...
+	}()
+
+	var expiredLeaseC <-chan []*lease.Lease
+	if s.lessor != nil {
+		expiredLeaseC = s.lessor.ExpiredLeasesC()
+	}
+
+	select {
+	case ap := <-s.r.apply():
+		fmt.Println("111", ap)
+	case leases := <-expiredLeaseC:
+		fmt.Println("222", leases)
+	case err := <-s.errorc:
+		if lg != nil {
+			lg.Warn("server error", zap.Error(err))
+			lg.Warn("data-dir used by this member must be removed")
+		}
+		return
+	// case <-getSyncC():
+	// 	if s.v2store.HasTTLKeys() {
+	// 		s.sync(s.Cfg.ReqTimeout())
+	// 	}
+	case <-s.stop:
+		return
+	}
+
+}
+
+func (s *EtcdServer) isLeader() bool {
+	return uint64(s.ID()) == s.Lead()
 }
 
 func (s *EtcdServer) ClusterVersion() *semver.Version {
@@ -483,5 +662,87 @@ func (s *EtcdServer) ClusterVersion() *semver.Version {
 	return s.cluster.Version()
 }
 
+// 相关 get/set
+
+func (s *EtcdServer) setCommittedIndex(v uint64) {
+	atomic.StoreUint64(&s.committedIndex, v)
+}
+
+func (s *EtcdServer) getCommittedIndex() uint64 {
+	return atomic.LoadUint64(&s.committedIndex)
+}
+
+func (s *EtcdServer) setAppliedIndex(v uint64) {
+	atomic.StoreUint64(&s.appliedIndex, v)
+}
+
+func (s *EtcdServer) getAppliedIndex() uint64 {
+	return atomic.LoadUint64(&s.appliedIndex)
+}
+
+func (s *EtcdServer) setTerm(v uint64) {
+	atomic.StoreUint64(&s.term, v)
+}
+
+func (s *EtcdServer) getTerm() uint64 {
+	return atomic.LoadUint64(&s.term)
+}
+
+func (s *EtcdServer) setLead(v uint64) {
+	atomic.StoreUint64(&s.lead, v)
+}
+
+func (s *EtcdServer) getLead() uint64 {
+	return atomic.LoadUint64(&s.lead)
+}
+
+func (s *EtcdServer) leaderChangedNotify() <-chan struct{} {
+	s.leaderChangedMu.RLock()
+	defer s.leaderChangedMu.RUnlock()
+	return s.leaderChanged
+}
+
 //
+type RaftStatusGetter interface {
+	ID() types.ID
+	Leader() types.ID
+	CommittedIndex() uint64
+	AppliedIndex() uint64
+	Term() uint64
+}
+
+//相关get
+
 func (s *EtcdServer) ID() types.ID { return s.id }
+
+func (s *EtcdServer) Leader() types.ID { return types.ID(s.getLead()) }
+
+func (s *EtcdServer) Lead() uint64 { return s.getLead() }
+
+func (s *EtcdServer) CommittedIndex() uint64 { return s.getCommittedIndex() }
+
+func (s *EtcdServer) AppliedIndex() uint64 { return s.getAppliedIndex() }
+
+func (s *EtcdServer) Term() uint64 { return s.getTerm() }
+
+// 根据传入的f开启一个协程
+func (s *EtcdServer) goAttach(f func()) {
+	s.wgMu.RLock()
+	defer s.wgMu.RUnlock()
+	select {
+	case <-s.stopping: // 检查当前etcd实例是否已经停止，停止则return
+		if lg := s.getLogger(); lg != nil {
+			lg.Warn("server has stopped; skipping goAttach")
+		}
+		return
+	default:
+		//fmt.Println("select default")
+	}
+
+	// now safe to add since waitgroup wait has not started yet
+	s.wg.Add(1) //
+	go func() { // 启动一个goroutine
+		defer s.wg.Done() // goroutine结束时调用
+		f()
+	}()
+}

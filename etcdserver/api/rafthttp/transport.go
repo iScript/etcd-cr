@@ -27,7 +27,7 @@ type Transporter interface {
 	//Start() error
 
 	// handle实例
-	//Handler() http.Handler
+	Handler() http.Handler
 
 	// 发送消息
 	// Send(m []raftpb.Message)
@@ -109,6 +109,19 @@ func (t *Transport) Start() error {
 	//fmt.Println("rafthttp start")
 
 	return nil
+}
+
+func (t *Transport) Handler() http.Handler {
+	pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
+	// streamHandler := newStreamHandler(t, t, t.Raft, t.ID, t.ClusterID)
+	// snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID)
+	// 路由规则
+	mux := http.NewServeMux()
+	mux.Handle(RaftPrefix, pipelineHandler) //第二个参数Handle是个接口，需要实现servehttp方法
+	// mux.Handle(RaftStreamPrefix+"/", streamHandler)
+	// mux.Handle(RaftSnapshotPrefix, snapHandler)
+	// mux.Handle(ProbingPrefix, probing.NewHandler())
+	return mux
 }
 
 func (t *Transport) AddRemote(id types.ID, us []string) {
