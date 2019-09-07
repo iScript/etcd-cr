@@ -12,8 +12,6 @@ service KV {
           body: "*"
       };
     }
-  
-
 }
 
 message RangeRequest {

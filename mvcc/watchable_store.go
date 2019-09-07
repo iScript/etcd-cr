@@ -35,15 +35,15 @@ type watchableStore struct {
 	mu sync.RWMutex
 
 	// victims are watcher batches that were blocked on the watch channel
-	victims []watcherBatch
+	//victims []watcherBatch
 	victimc chan struct{}
 
 	// contains all unsynced watchers that needs to sync with events that have happened
-	unsynced watcherGroup
+	//unsynced watcherGroup
 
 	// contains all synced watchers that are in sync with the progress of the store.
 	// The key of the map is the key that the watcher watches on.
-	synced watcherGroup
+	//synced watcherGroup
 
 	stopc chan struct{}
 	wg    sync.WaitGroup
@@ -54,12 +54,12 @@ func New(lg *zap.Logger, b backend.Backend, le lease.Lessor, ig ConsistentIndexG
 }
 
 func newWatchableStore(lg *zap.Logger, b backend.Backend, le lease.Lessor, ig ConsistentIndexGetter, cfg StoreConfig) *watchableStore {
-	s := &watchableStore{
-		store:    NewStore(lg, b, le, ig, cfg),
-		victimc:  make(chan struct{}, 1),
-		unsynced: newWatcherGroup(),
-		synced:   newWatcherGroup(),
-		stopc:    make(chan struct{}),
-	}
-
+	// s := &watchableStore{
+	// 	store:    NewStore(lg, b, le, ig, cfg),
+	// 	victimc:  make(chan struct{}, 1),
+	// 	unsynced: newWatcherGroup(),
+	// 	synced:   newWatcherGroup(),
+	// 	stopc:    make(chan struct{}),
+	// }
+	return nil
 }

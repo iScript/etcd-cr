@@ -12,12 +12,14 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	humanize "github.com/dustin/go-humanize"
+	"github.com/iScript/etcd-cr/etcdserver/api"
 	"github.com/iScript/etcd-cr/etcdserver/api/membership"
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
 	"github.com/iScript/etcd-cr/etcdserver/api/snap"
 	stats "github.com/iScript/etcd-cr/etcdserver/api/v2stats"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
 	"github.com/iScript/etcd-cr/lease"
+	"github.com/iScript/etcd-cr/mvcc"
 	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
 	"github.com/iScript/etcd-cr/pkg/types"
@@ -166,7 +168,7 @@ type EtcdServer struct {
 	// applyV3Base applierV3
 	applyWait wait.WaitTime //WaitTime是上面介绍的Wait之上的一层扩展。记录的id是有序的
 
-	// kv         mvcc.ConsistentWatchableKV	//v3版本的存储
+	kv     mvcc.ConsistentWatchableKV //v3版本的存储
 	lessor lease.Lessor
 	// bemu       sync.Mutex
 	be backend.Backend // 后端存储
@@ -357,7 +359,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			CheckpointInterval:         cfg.LeaseCheckpointInterval,
 			ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
 		})
-
+	//srv.kv = mvcc.New(srv.getLogger(), srv.be, srv.lessor, &srv.consistIndex, mvcc.StoreConfig{CompactionBatchLimit: cfg.CompactionBatchLimit})
 	tr := &rafthttp.Transport{
 		Logger:      cfg.Logger,
 		TLSInfo:     cfg.PeerTLSInfo,
@@ -491,7 +493,7 @@ func (s *EtcdServer) start() {
 
 func (s *EtcdServer) purgeFile() {}
 
-//func (s *EtcdServer) Cluster() api.Cluster { return s.cluster }
+func (s *EtcdServer) Cluster() api.Cluster { return s.cluster } // s.cluster需要实现api.Cluster接口
 
 func (s *EtcdServer) ApplyWait() <-chan struct{} { return s.applyWait.Wait(s.getCommittedIndex()) }
 
@@ -724,6 +726,33 @@ func (s *EtcdServer) CommittedIndex() uint64 { return s.getCommittedIndex() }
 func (s *EtcdServer) AppliedIndex() uint64 { return s.getAppliedIndex() }
 
 func (s *EtcdServer) Term() uint64 { return s.getTerm() }
+
+//返回实现了ConsistentWatchableKV接口的对象
+func (s *EtcdServer) KV() mvcc.ConsistentWatchableKV { return s.kv }
+
+// func (s *EtcdServer) Backend() backend.Backend {
+// 	s.bemu.Lock()
+// 	defer s.bemu.Unlock()
+// 	return s.be
+// }
+
+// func (s *EtcdServer) AuthStore() auth.AuthStore { return s.authStore }
+
+// func (s *EtcdServer) restoreAlarms() error {
+// 	s.applyV3 = s.newApplierV3()
+// 	as, err := v3alarm.NewAlarmStore(s)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	s.alarmStore = as
+// 	if len(as.Get(pb.AlarmType_NOSPACE)) > 0 {
+// 		s.applyV3 = newApplierV3Capped(s.applyV3)
+// 	}
+// 	if len(as.Get(pb.AlarmType_CORRUPT)) > 0 {
+// 		s.applyV3 = newApplierV3Corrupt(s.applyV3)
+// 	}
+// 	return nil
+// }
 
 // 根据传入的f开启一个协程
 func (s *EtcdServer) goAttach(f func()) {

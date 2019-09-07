@@ -86,3 +86,22 @@ type KV interface {
 	Restore(b backend.Backend) error
 	Close() error
 }
+
+// 能被watch的kv
+type WatchableKV interface {
+	KV
+	Watchable
+}
+
+// Watchable 接口
+type Watchable interface {
+	// NewWatchStream returns a WatchStream that can be used to
+	// watch events happened or happening on the KV.
+	// NewWatchStream() WatchStream
+}
+
+type ConsistentWatchableKV interface {
+	// WatchableKV
+	// 返回kv中当前一致的index
+	//ConsistentIndex() uint64
+}
