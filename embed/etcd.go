@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io/ioutil"
+	defaultLog "log"
 	"net"
+	"net/http"
 	"runtime"
 	"sync"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver/api/v3rpc"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/version"
+	"github.com/soheilhy/cmux"
 	"go.uber.org/zap"
 )
 
@@ -39,8 +43,8 @@ const (
 type Etcd struct {
 	Peers   []*peerListener
 	Clients []net.Listener
-	// // a map of contexts for the servers that serves client requests.
-	//sctxs map[string]*serveCtx
+	// serve context 对应map
+	sctxs            map[string]*serveCtx
 	metricsListeners []net.Listener
 
 	Server *etcdserver.EtcdServer
@@ -66,7 +70,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return nil, err
 	}
 
-	//serving := false
+	serving := false
 
 	e = &Etcd{cfg: *inCfg, stopc: make(chan struct{})} // 空struct内存友好
 	cfg := &e.cfg
@@ -75,6 +79,14 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		if e == nil || err == nil {
 			return
 		}
+		if !serving {
+			//
+			for _, sctx := range e.sctxs {
+				close(sctx.serversC)
+			}
+		}
+		e.Close()
+		e = nil
 	}()
 
 	if e.cfg.logger != nil {
@@ -180,6 +192,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return e, err
 	}
 
+	serving = true
 	return e, nil
 }
 
@@ -218,6 +231,43 @@ func print(lg *zap.Logger, ec Config, sc etcdserver.ServerConfig, memberInitiali
 func (e *Etcd) Config() Config {
 	return e.cfg
 }
+
+func (e *Etcd) Close() {}
+
+func stopServers(ctx context.Context, ss *servers) {
+	shutdownNow := func() {
+		// 首先关闭 http.Server
+		ss.http.Shutdown(ctx)
+		// 然后关闭grpc server
+		ss.grpc.Stop()
+	}
+
+	if ss.secure {
+		shutdownNow()
+		return
+	}
+
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		ss.grpc.GracefulStop()
+	}()
+
+	// wait until all pending RPCs are finished
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		// took too long, manually close open transports
+		// e.g. watch streams
+		shutdownNow()
+
+		// concurrent GracefulStop should be interrupted
+		<-ch
+	}
+}
+
+// 返回error通道
+func (e *Etcd) Err() <-chan error { return e.errc }
 
 func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 	if err = updateCipherSuites(&cfg.PeerTLSInfo, cfg.CipherSuites); err != nil {
@@ -294,7 +344,7 @@ func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 }
 
 func (e *Etcd) servePeers() (err error) {
-	ph := etcdhttp.NewPeerHandler(e.GetLogger(), e.Server) // 返回http handle
+	ph := etcdhttp.NewPeerHandler(e.GetLogger(), e.Server) // 返回http.handle
 	fmt.Println(ph)
 
 	var peerTLScfg *tls.Config
@@ -306,13 +356,67 @@ func (e *Etcd) servePeers() (err error) {
 
 	//循环Peers  （peerListener struct）
 	for _, p := range e.Peers {
-		//fmt.Println(p, 232323)
-		u := p.Listener.Addr().String() // url  127.0.0.1:2380
-		gs := v3rpc.Server(e.Server, peerTLScfg)
-		fmt.Println(u, gs, "uuu")
+
+		u := p.Listener.Addr().String()          // url  127.0.0.1:2380
+		gs := v3rpc.Server(e.Server, peerTLScfg) // 返回grpc.server
+
+		m := cmux.New(p.Listener) //cmux库用于在同一的端口监听不同的服务 如grpc http HTTP2
+		go gs.Serve(m.Match(cmux.HTTP2()))
+
+		srv := &http.Server{
+			Handler:     grpcHandlerFunc(gs, ph), // 传入grpc.server, http.handle
+			ReadTimeout: 5 * time.Minute,
+			ErrorLog:    defaultLog.New(ioutil.Discard, "", 0), // do not log user error
+		}
+
+		go srv.Serve(m.Match(cmux.Any()))
+		p.serve = func() error { return m.Serve() }
+		p.close = func(ctx context.Context) error {
+
+			if e.cfg.logger != nil {
+				e.cfg.logger.Info(
+					"stopping serving peer traffic",
+					zap.String("address", u),
+				)
+			}
+			stopServers(ctx, &servers{secure: peerTLScfg != nil, grpc: gs, http: srv})
+			if e.cfg.logger != nil {
+				e.cfg.logger.Info(
+					"stopped serving peer traffic",
+					zap.String("address", u),
+				)
+			}
+			return nil
+		}
+
+	}
+
+	for _, pl := range e.Peers {
+		go func(l *peerListener) {
+			u := l.Addr().String()
+			if e.cfg.logger != nil {
+				e.cfg.logger.Info(
+					"serving peer traffic",
+					zap.String("address", u),
+				)
+			}
+			e.errHandler(l.serve())
+		}(pl)
 	}
 
 	return nil
+}
+
+func (e *Etcd) errHandler(err error) {
+	select {
+	case <-e.stopc:
+		return
+	default:
+	}
+	select {
+	case <-e.stopc:
+	case e.errc <- err:
+	}
 }
 
 // 返回logger

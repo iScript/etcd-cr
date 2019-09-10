@@ -20,6 +20,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/prometheus/client_golang v1.1.0
+	github.com/soheilhy/cmux v0.1.4
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2
 	go.etcd.io/bbolt v1.3.3
 	go.etcd.io/etcd v3.3.15+incompatible
