@@ -8,6 +8,7 @@ import (
 	"github.com/coreos/pkg/capnslog"
 	"github.com/iScript/etcd-cr/embed"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
+	"github.com/iScript/etcd-cr/pkg/osutil"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -92,8 +93,8 @@ func startEtcdOrProxyV2() {
 		}
 	}
 
-	// var stopped <-chan struct{}
-	// var errc <-chan error
+	var stopped <-chan struct{} // stopped只能接收通道中的数据
+	var errc <-chan error
 
 	which := identifyDataDirOrDie(cfg.ec.GetLogger(), cfg.ec.Dir)
 	// 初次启动为空即dirEmpty , 第二次启动则为member
@@ -107,7 +108,7 @@ func startEtcdOrProxyV2() {
 		}
 		switch which {
 		case dirMember:
-			_, _, err = startEtcd(&cfg.ec)
+			stopped, errc, err = startEtcd(&cfg.ec)
 		case dirProxy:
 			//err = startProxy(cfg)
 		default:
@@ -131,22 +132,47 @@ func startEtcdOrProxyV2() {
 		}
 	}
 
+	// 启动etcd有错误的情况
 	if err != nil {
 
 	}
 
+	osutil.HandleInterrupts(lg)
+
+	//到了这一步，已经初始化完成了etcd
+	//tcp端口已经准备好监听请求
+	//etcd已经加入了集群
+	notifySystemd(lg)
+
+	// 阻塞 监听是否有错误或停止了
+	// 有则退出程序
+	// errc 为embed etcd.errc ， e.errHandler 有错误则传入
+	// stopped 为 embed etcd.server.done
+	select {
+	case lerr := <-errc:
+		if lg != nil {
+			lg.Fatal("listener failed", zap.Error(lerr))
+		}
+	case <-stopped:
+	}
+
+	osutil.Exit(0)
 }
 
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
-	_, err := embed.StartEtcd(cfg)
+	e, err := embed.StartEtcd(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	// select {
-	// 	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
-	// 	case <-e.Server.StopNotify(): // publish aborted from 'ErrStopped'
-	// }
-	return nil, nil, nil
+	osutil.RegisterInterruptHandler(e.Close)
+
+	// 监听和channel有关的IO操作
+	// 会阻塞，直到监听到一个可以执行的IO操作为止
+	select {
+	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
+	case <-e.Server.StopNotify(): // publish aborted from 'ErrStopped'
+	}
+	return e.Server.StopNotify(), e.Err(), nil
 }
 
 // 返回文件夹类型

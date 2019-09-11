@@ -174,7 +174,9 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return e, err
 	}
 
-	//e.errc = make(chan error, len(e.Peers)+len(e.Clients)+2*len(e.sctxs))
+	// 创建带缓冲的通道
+	// 不带缓冲的通道是阻塞的，往通道发送数据后，这个数据如果没有被取，就是不能继续向通道里面发送数据。
+	e.errc = make(chan error, len(e.Peers)+len(e.Clients)+2*len(e.sctxs))
 
 	//第一次初始化为false
 	if memberInitialized {
@@ -266,7 +268,7 @@ func stopServers(ctx context.Context, ss *servers) {
 	}
 }
 
-// 返回error通道
+// 返回error通道 ， 返回后的通道只能出数据
 func (e *Etcd) Err() <-chan error { return e.errc }
 
 func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
@@ -407,6 +409,7 @@ func (e *Etcd) servePeers() (err error) {
 	return nil
 }
 
+// 错误处理
 func (e *Etcd) errHandler(err error) {
 	select {
 	case <-e.stopc:
@@ -415,7 +418,7 @@ func (e *Etcd) errHandler(err error) {
 	}
 	select {
 	case <-e.stopc:
-	case e.errc <- err:
+	case e.errc <- err: //如果发生错误，将错误传入通道
 	}
 }
 

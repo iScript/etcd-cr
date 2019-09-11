@@ -657,6 +657,25 @@ func (s *EtcdServer) isLeader() bool {
 	return uint64(s.ID()) == s.Lead()
 }
 
+// 当server准备好时返回一个通道
+//
+func (s *EtcdServer) ReadyNotify() <-chan struct{} { return s.readych }
+
+func (s *EtcdServer) stopWithDelay(d time.Duration, err error) {
+	select {
+	case <-time.After(d):
+	case <-s.done:
+	}
+	select {
+	case s.errorc <- err:
+	default:
+	}
+}
+
+// StopNotify returns a channel that receives a empty struct
+// when the server is stopped.
+func (s *EtcdServer) StopNotify() <-chan struct{} { return s.done }
+
 func (s *EtcdServer) ClusterVersion() *semver.Version {
 	if s.cluster == nil {
 		return nil
