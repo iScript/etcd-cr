@@ -17,6 +17,9 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver/api/etcdhttp"
 	"github.com/iScript/etcd-cr/etcdserver/api/rafthttp"
 	"github.com/iScript/etcd-cr/etcdserver/api/v3rpc"
+	"github.com/iScript/etcd-cr/pkg/debugutil"
+	runtimeutil "github.com/iScript/etcd-cr/pkg/runtime"
+	"github.com/iScript/etcd-cr/pkg/transport"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/version"
 	"github.com/soheilhy/cmux"
@@ -65,7 +68,7 @@ type peerListener struct {
 //  embed.Config
 func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
-	//之前验证过  ？
+	//之前验证过
 	if err = inCfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -76,9 +79,11 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	cfg := &e.cfg
 
 	defer func() {
+		// 都没错误直接返回
 		if e == nil || err == nil {
 			return
 		}
+		// 有错误则关闭
 		if !serving {
 			//
 			for _, sctx := range e.sctxs {
@@ -96,6 +101,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		)
 	}
 
+	// 配置peer listener
 	if e.Peers, err = configurePeerListeners(cfg); err != nil {
 		return e, err
 	}
@@ -106,9 +112,11 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			zap.Strings("listen-client-urls", e.cfg.getLCURLs()),
 		)
 	}
-	// if e.sctxs, err = configureClientListeners(cfg); err != nil {
-	// 	return e, err
-	// }
+
+	// 配置configure listener
+	if e.sctxs, err = configureClientListeners(cfg); err != nil {
+		return e, err
+	}
 
 	var (
 		urlsmap types.URLsMap
@@ -194,7 +202,28 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return e, err
 	}
 
+	// if err = e.serveClients(); err != nil {
+	// 	return e, err
+	// }
+
+	// if err = e.serveMetrics(); err != nil {
+	// 	return e, err
+	// }
+
+	if e.cfg.logger != nil {
+		e.cfg.logger.Info(
+			"now serving peer/client/metrics",
+			zap.String("local-member-id", e.Server.ID().String()),
+			zap.Strings("initial-advertise-peer-urls", e.cfg.getAPURLs()),
+			zap.Strings("listen-peer-urls", e.cfg.getLPURLs()),
+			zap.Strings("advertise-client-urls", e.cfg.getACURLs()),
+			zap.Strings("listen-client-urls", e.cfg.getLCURLs()),
+			zap.Strings("listen-metrics-urls", e.cfg.getMetricsURLs()),
+		)
+	}
+
 	serving = true
+
 	return e, nil
 }
 
@@ -236,6 +265,7 @@ func (e *Etcd) Config() Config {
 
 func (e *Etcd) Close() {}
 
+// 停止server
 func stopServers(ctx context.Context, ss *servers) {
 	shutdownNow := func() {
 		// 首先关闭 http.Server
@@ -407,6 +437,133 @@ func (e *Etcd) servePeers() (err error) {
 	}
 
 	return nil
+}
+
+func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err error) {
+
+	// tsl 相关
+	if err = updateCipherSuites(&cfg.ClientTLSInfo, cfg.CipherSuites); err != nil {
+		return nil, err
+	}
+
+	if err = cfg.ClientSelfCert(); err != nil {
+		if cfg.logger != nil {
+			cfg.logger.Fatal("failed to get client self-signed certs", zap.Error(err))
+		}
+	}
+
+	if cfg.EnablePprof {
+		if cfg.logger != nil {
+			cfg.logger.Info("pprof is enabled", zap.String("path", debugutil.HTTPPrefixPProf))
+		}
+	}
+
+	sctxs = make(map[string]*serveCtx)
+
+	// LCUrls为url.URL类型 默认为DefaultListenClientURLs = "http://localhost:2379"
+	for _, u := range cfg.LCUrls {
+		sctx := newServeCtx(cfg.logger)
+
+		if u.Scheme == "http" || u.Scheme == "unix" {
+			// 如果是http,但是配置了证书 , 则忽略
+			if !cfg.ClientTLSInfo.Empty() {
+				if cfg.logger != nil {
+					cfg.logger.Warn("scheme is HTTP while key and cert files are present; ignoring key and cert files", zap.String("client-url", u.String()))
+				}
+			}
+			// 如果是http,开启了ClientCertAuth，则忽略
+			if cfg.ClientTLSInfo.ClientCertAuth {
+				if cfg.logger != nil {
+					cfg.logger.Warn("scheme is HTTP while --client-cert-auth is enabled; ignoring client cert auth for this URL", zap.String("client-url", u.String()))
+				}
+			}
+		}
+		// 如果是https ， 但是没配置证书 ， 则错误
+		if (u.Scheme == "https" || u.Scheme == "unixs") && cfg.ClientTLSInfo.Empty() {
+			return nil, fmt.Errorf("TLS key/cert (--cert-file, --key-file) must be provided for client url %s with HTTPS scheme", u.String())
+		}
+
+		network := "tcp"
+		addr := u.Host
+		if u.Scheme == "unix" || u.Scheme == "unixs" {
+			network = "unix"
+			addr = u.Host + u.Path
+		}
+
+		sctx.network = network
+		sctx.secure = u.Scheme == "https" || u.Scheme == "unixs"
+		sctx.insecure = !sctx.secure
+
+		// 如果addr有值，更新secure后直接下一个循环
+		if oldctx := sctxs[addr]; oldctx != nil {
+			oldctx.secure = oldctx.secure || sctx.secure
+			oldctx.insecure = oldctx.insecure || sctx.insecure
+			continue
+		}
+
+		if sctx.l, err = net.Listen(network, addr); err != nil {
+			return nil, err
+		}
+
+		sctx.addr = addr
+
+		// 检测进程打开文件数限制
+		if fdLimit, fderr := runtimeutil.FDLimit(); fderr == nil {
+			// 如果小于
+			if fdLimit <= reservedInternalFDNum {
+				if cfg.logger != nil {
+					cfg.logger.Fatal(
+						"file descriptor limit of etcd process is too low; please set higher",
+						zap.Uint64("limit", fdLimit),
+						zap.Int("recommended-limit", reservedInternalFDNum),
+					)
+				}
+			}
+			sctx.l = transport.LimitListener(sctx.l, int(fdLimit-reservedInternalFDNum))
+		}
+
+		// tcp or unix
+		if network == "tcp" {
+			if sctx.l, err = transport.NewKeepAliveListener(sctx.l, network, nil); err != nil {
+				return nil, err
+			}
+		}
+
+		// 函数结束时判断有没错误
+		defer func() {
+			if err == nil {
+				return
+			}
+			sctx.l.Close()
+			if cfg.logger != nil {
+				cfg.logger.Warn(
+					"closing peer listener",
+					zap.String("address", u.Host),
+					zap.Error(err),
+				)
+			}
+		}()
+
+		//默认map空？
+		for k := range cfg.UserHandlers {
+			sctx.userHandlers[k] = cfg.UserHandlers[k]
+		}
+		//
+		sctx.serviceRegister = cfg.ServiceRegister
+
+		// 是否启用pprof
+		if cfg.EnablePprof || cfg.Debug {
+			sctx.registerPprof()
+		}
+		// 是否debug 模式
+		if cfg.Debug {
+			sctx.registerTrace()
+		}
+		sctxs[addr] = sctx
+
+	}
+
+	return sctxs, nil
 }
 
 // 错误处理

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -108,9 +109,9 @@ type Config struct {
 
 	LPUrls, LCUrls []url.URL
 	APUrls, ACUrls []url.URL
-	// ClientTLSInfo  transport.TLSInfo
-	// ClientAutoTLS  bool
-	PeerTLSInfo transport.TLSInfo
+	ClientTLSInfo  transport.TLSInfo
+	ClientAutoTLS  bool
+	PeerTLSInfo    transport.TLSInfo
 	// PeerAutoTLS    bool
 
 	CipherSuites []string `json:"cipher-suites"`
@@ -373,6 +374,27 @@ func (cfg Config) defaultPeerHost() bool {
 // 是否为默认的clientHost ， 数组里就一个值且值为默认http://localhost:2379
 func (cfg Config) defaultClientHost() bool {
 	return len(cfg.ACUrls) == 1 && cfg.ACUrls[0].String() == DefaultAdvertiseClientURLs
+}
+
+func (cfg *Config) ClientSelfCert() (err error) {
+	if !cfg.ClientAutoTLS {
+		return nil
+	}
+	if !cfg.ClientTLSInfo.Empty() {
+		if cfg.logger != nil {
+			cfg.logger.Warn("ignoring client auto TLS since certs given")
+		}
+		return nil
+	}
+	chosts := make([]string, len(cfg.LCUrls))
+	for i, u := range cfg.LCUrls {
+		chosts[i] = u.Host
+	}
+	cfg.ClientTLSInfo, err = transport.SelfCert(cfg.logger, filepath.Join(cfg.Dir, "fixtures", "client"), chosts)
+	if err != nil {
+		return err
+	}
+	return updateCipherSuites(&cfg.ClientTLSInfo, cfg.CipherSuites)
 }
 
 func (cfg *Config) PeerSelfCert() (err error) {

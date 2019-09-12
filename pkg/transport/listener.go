@@ -1,11 +1,20 @@
 package transport
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/iScript/etcd-cr/pkg/tlsutil"
 	"go.uber.org/zap"
@@ -39,6 +48,7 @@ func wrapTLS(scheme string, tlsinfo *TLSInfo, l net.Listener) (net.Listener, err
 	// return newTLSListener(l, tlsinfo, checkSAN)
 }
 
+// TSL 加密相关
 type TLSInfo struct {
 	CertFile           string
 	KeyFile            string
@@ -86,9 +96,117 @@ func (info TLSInfo) String() string {
 	return fmt.Sprintf("cert = %s, key = %s, trusted-ca = %s, client-cert-auth = %v, crl-file = %s", info.CertFile, info.KeyFile, info.TrustedCAFile, info.ClientCertAuth, info.CRLFile)
 }
 
-//判断是否为空
+//判断证书和key是否为空
 func (info TLSInfo) Empty() bool {
 	return info.CertFile == "" && info.KeyFile == ""
+}
+
+func SelfCert(lg *zap.Logger, dirpath string, hosts []string, additionalUsages ...x509.ExtKeyUsage) (info TLSInfo, err error) {
+	if err = os.MkdirAll(dirpath, 0700); err != nil {
+		return
+	}
+	info.Logger = lg
+
+	certPath := filepath.Join(dirpath, "cert.pem")
+	keyPath := filepath.Join(dirpath, "key.pem")
+	_, errcert := os.Stat(certPath)
+	_, errkey := os.Stat(keyPath)
+	if errcert == nil && errkey == nil {
+		info.CertFile = certPath
+		info.KeyFile = keyPath
+		info.selfCert = true
+		return
+	}
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		if info.Logger != nil {
+			info.Logger.Warn(
+				"cannot generate random number",
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
+	tmpl := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      pkix.Name{Organization: []string{"etcd"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * (24 * time.Hour)),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           append([]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, additionalUsages...),
+		BasicConstraintsValid: true,
+	}
+
+	for _, host := range hosts {
+		h, _, _ := net.SplitHostPort(host)
+		if ip := net.ParseIP(h); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else {
+			tmpl.DNSNames = append(tmpl.DNSNames, h)
+		}
+	}
+
+	priv, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	if err != nil {
+		if info.Logger != nil {
+			info.Logger.Warn(
+				"cannot generate ECDSA key",
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		if info.Logger != nil {
+			info.Logger.Warn(
+				"cannot generate x509 certificate",
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		info.Logger.Warn(
+			"cannot cert file",
+			zap.String("path", certPath),
+			zap.Error(err),
+		)
+		return
+	}
+	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	certOut.Close()
+	if info.Logger != nil {
+		info.Logger.Info("created cert file", zap.String("path", certPath))
+	}
+
+	b, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return
+	}
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		if info.Logger != nil {
+			info.Logger.Warn(
+				"cannot key file",
+				zap.String("path", keyPath),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: b})
+	keyOut.Close()
+	if info.Logger != nil {
+		info.Logger.Info("created key file", zap.String("path", keyPath))
+	}
+	return SelfCert(lg, dirpath, hosts)
 }
 
 func (info TLSInfo) baseConfig() (*tls.Config, error) {
