@@ -176,6 +176,23 @@ func (c *RaftCluster) SetBackend(be backend.Backend) {
 	// mustCreateBackendBuckets(c.be)  还没设置batchTx.tx , 无法创建
 }
 
+// 更新attribute
+func (c *RaftCluster) UpdateAttributes(id types.ID, attr Attributes) {
+	c.Lock()
+	defer c.Unlock()
+
+	// if m, ok := c.members[id]; ok {
+	// 	m.Attributes = attr
+	// 	if c.v2store != nil {
+	// 		mustUpdateMemberAttrInStore(c.v2store, m)
+	// 	}
+	// 	if c.be != nil {
+	// 		mustSaveMemberToBackend(c.be, m)
+	// 	}
+	// 	return
+	// }
+}
+
 func (c *RaftCluster) Version() *semver.Version {
 	c.Lock()
 	defer c.Unlock()

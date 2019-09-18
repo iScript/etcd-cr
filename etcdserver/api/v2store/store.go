@@ -1,6 +1,7 @@
 package v2store
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -15,11 +16,18 @@ func init() {
 
 type Store interface {
 	Version() int
+	Create(nodePath string, dir bool, value string, unique bool,
+		expireOpts TTLOptionSet) (*Event, error)
+}
+
+type TTLOptionSet struct {
+	ExpireTime time.Time
+	Refresh    bool
 }
 
 type store struct {
-	// Root           *node
-	// WatcherHub     *watcherHub
+	Root       *node // 树形结构的根节点。v2存储是内存实现，它以树形结构将全部数据维护在内存中，树中的每个节点都是一个node实例
+	WatcherHub *watcherHub
 	// CurrentIndex   uint64
 	// Stats          *Stats
 	CurrentVersion int
@@ -29,9 +37,10 @@ type store struct {
 	// readonlySet    types.Set
 }
 
-// 指定的namespace作为初始目录创建store
+// 指定的namespace作为初始目录创建store , 默认2个常量目录为 /0  /1
 // 返回一个interface ，所以new 的struct需要实现interface的接口
 func New(namespaces ...string) Store {
+	fmt.Println("store New", namespaces)
 	s := newStore(namespaces...)
 	//s.clock = clockwork.NewRealClock()
 	return s
@@ -54,4 +63,8 @@ func newStore(namespaces ...string) *store {
 // 返回当前store的version
 func (s *store) Version() int {
 	return s.CurrentVersion
+}
+
+func (s *store) Create(nodePath string, dir bool, value string, unique bool, expireOpts TTLOptionSet) (*Event, error) {
+	return nil, nil
 }

@@ -24,6 +24,8 @@ import (
 	"github.com/iScript/etcd-cr/version"
 	"github.com/soheilhy/cmux"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 var plog = capnslog.NewPackageLogger("github.com/iScript/etcd-cr", "pkg/flags")
@@ -202,9 +204,9 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		return e, err
 	}
 
-	// if err = e.serveClients(); err != nil {
-	// 	return e, err
-	// }
+	if err = e.serveClients(); err != nil {
+		return e, err
+	}
 
 	// if err = e.serveMetrics(); err != nil {
 	// 	return e, err
@@ -566,8 +568,60 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 	return sctxs, nil
 }
 
+func (e *Etcd) serveClients() (err error) {
+	if !e.cfg.ClientTLSInfo.Empty() {
+		if e.cfg.logger != nil {
+			e.cfg.logger.Info(
+				"starting with client TLS",
+				zap.String("tls-info", fmt.Sprintf("%+v", e.cfg.ClientTLSInfo)),
+				zap.Strings("cipher-suites", e.cfg.CipherSuites),
+			)
+		}
+	}
+
+	var h http.Handler
+
+	// 可以响应client的请求
+	//if e.Config().EnableV2 {
+	if false {
+		fmt.Println("enablev2")
+
+	} else { // 只提供基本的查询功能，不能响应client的请求
+		fmt.Println("enablev2 false")
+		mux := http.NewServeMux()
+		etcdhttp.HandleBasic(mux, e.Server)
+		h = mux
+	}
+
+	// grpc 相关配置
+	gopts := []grpc.ServerOption{}
+	if e.cfg.GRPCKeepAliveMinTime > time.Duration(0) {
+		gopts = append(gopts, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             e.cfg.GRPCKeepAliveMinTime,
+			PermitWithoutStream: false,
+		}))
+	}
+	if e.cfg.GRPCKeepAliveInterval > time.Duration(0) &&
+		e.cfg.GRPCKeepAliveTimeout > time.Duration(0) {
+		gopts = append(gopts, grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    e.cfg.GRPCKeepAliveInterval,
+			Timeout: e.cfg.GRPCKeepAliveTimeout,
+		}))
+	}
+
+	for _, sctx := range e.sctxs {
+		go func(s *serveCtx) {
+			e.errHandler(s.serve(e.Server, &e.cfg.ClientTLSInfo, h, e.errHandler, gopts...))
+		}(sctx)
+	}
+
+	fmt.Println("serveclient over")
+	return nil
+}
+
 // 错误处理
 func (e *Etcd) errHandler(err error) {
+	fmt.Println(err, 112233333)
 	select {
 	case <-e.stopc:
 		return

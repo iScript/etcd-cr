@@ -150,6 +150,7 @@ func startEtcdOrProxyV2() {
 	// stopped 为 embed etcd.server.done
 	select {
 	case lerr := <-errc:
+		fmt.Println(lerr)
 		if lg != nil {
 			lg.Fatal("listener failed", zap.Error(lerr))
 		}

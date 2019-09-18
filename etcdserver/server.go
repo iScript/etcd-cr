@@ -2,10 +2,13 @@ package etcdserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
 	"net/http"
+	"path"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,10 +21,12 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver/api/snap"
 	stats "github.com/iScript/etcd-cr/etcdserver/api/v2stats"
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
+	pb "github.com/iScript/etcd-cr/etcdserver/etcdserverpb"
 	"github.com/iScript/etcd-cr/lease"
 	"github.com/iScript/etcd-cr/mvcc"
 	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/fileutil"
+	"github.com/iScript/etcd-cr/pkg/idutil"
 	"github.com/iScript/etcd-cr/pkg/types"
 	"github.com/iScript/etcd-cr/pkg/wait"
 	"github.com/iScript/etcd-cr/raft"
@@ -63,6 +68,12 @@ const (
 	readyPercent = 0.9
 )
 
+var (
+	//plog = capnslog.NewPackageLogger("go.etcd.io/etcd", "etcdserver")
+
+	storeMemberAttributeRegexp = regexp.MustCompile(path.Join(membership.StoreMembersPrefix, "[[:xdigit:]]{1,16}", "attributes"))
+)
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
 
@@ -80,7 +91,7 @@ func init() {
 type Response struct {
 	Term  uint64
 	Index uint64
-	// Event   *v2store.Event
+	Event *v2store.Event
 	// Watcher v2store.Watcher
 	Err error
 }
@@ -89,8 +100,8 @@ type ServerV2 interface {
 	Server
 	Leader() types.ID
 
-	// Do takes a V2 request and attempts to fulfill it, returning a Response.
-	// Do(ctx context.Context, r pb.Request) (Response, error)
+	// 处理一个request ， 返回一个response
+	//Do(ctx context.Context, r pb.Request) (Response, error)
 	// stats.Stats
 	// ClientCertAuthEnabled() bool
 }
@@ -111,7 +122,7 @@ type Server interface {
 	//
 	ClusterVersion() *semver.Version
 
-	// Cluster() api.Cluster
+	Cluster() api.Cluster
 	// Alarms() []*pb.AlarmMember
 }
 
@@ -184,7 +195,7 @@ type EtcdServer struct {
 
 	// peerRt used to send requests (version, lease) to peers.
 	// peerRt   http.RoundTripper
-	// reqIDGen *idutil.Generator	// 用于生成请求的唯一标示
+	reqIDGen *idutil.Generator // 用于生成请求的唯一标示
 
 	// forceVersionC is used to force the version monitor loop
 	// to detect the cluster version immediately.
@@ -195,8 +206,7 @@ type EtcdServer struct {
 
 	wg sync.WaitGroup // 通过该字段等待后台所有goroutine全部退出
 
-	// ctx is used for etcd-initiated requests that may need to be canceled
-	// on etcd server shutdown.
+	// ctx用于etcd启动的请求，这些请求可能需要在etcd服务器关闭时取消。
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -207,6 +217,9 @@ type EtcdServer struct {
 }
 
 func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
+
+	// 创建v2版本存储，这里指定了2个只读目录，常量值分别是 /0 /1
+	st := v2store.New(StoreClusterPrefix, StoreKeysPrefix)
 
 	var (
 		w  *wal.WAL
@@ -315,6 +328,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	sstats := stats.NewServerStats(cfg.Name, id.String()) //server的相关统计数据
 	lstats := stats.NewLeaderStats(id.String())           //如果是leader，leader相关的数据
 
+	fmt.Println("serverid:", id, uint16(id))
+
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond //100毫秒， TickMs在embed/config中定义，默认为100
 	srv = &EtcdServer{
 		readych: make(chan struct{}),
@@ -322,7 +337,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		lgMu:    new(sync.RWMutex),
 		lg:      cfg.Logger,
 		errorc:  make(chan error, 1),
-		//v2store: st,
+		v2store: st,
 		//snapshotter: ss,  etcdserver/api/snap
 		r: *newRaftNode(
 			raftNodeConfig{
@@ -334,10 +349,13 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 				storage:     NewStorage(w, ss),
 			},
 		),
+		id:         id,
+		attributes: membership.Attributes{Name: cfg.Name, ClientURLs: cfg.ClientURLs.StringSlice()},
 		cluster:    cl,
 		stats:      sstats,
 		lstats:     lstats,
 		SyncTicker: time.NewTicker(500 * time.Millisecond), //同步ticker，500毫秒
+		reqIDGen:   idutil.NewGenerator(uint16(id), time.Now()),
 	}
 
 	//prometheus相关
@@ -411,7 +429,7 @@ func (s *EtcdServer) Start() {
 
 	//开启几个协程
 	s.goAttach(func() { s.adjustTicks() })
-	// s.goAttach(func() { s.publish(s.Cfg.ReqTimeout()) })
+	s.goAttach(func() { s.publish(s.Cfg.ReqTimeout()) })
 	// s.goAttach(s.purgeFile)
 	// s.goAttach(func() { monitorFileDescriptor(s.getLogger(), s.stopping) })
 	// s.goAttach(s.monitorVersions)
@@ -745,6 +763,49 @@ func (s *EtcdServer) CommittedIndex() uint64 { return s.getCommittedIndex() }
 func (s *EtcdServer) AppliedIndex() uint64 { return s.getAppliedIndex() }
 
 func (s *EtcdServer) Term() uint64 { return s.getTerm() }
+
+// 注册server信息到集群
+func (s *EtcdServer) publish(timeout time.Duration) {
+	fmt.Println("注册server信息到集群")
+
+	b, err := json.Marshal(s.attributes) // membership.Attributes 成员相关属性，包含name和clienturl
+	if err != nil {
+		if lg := s.getLogger(); lg != nil {
+			lg.Panic("failed to marshal JSON", zap.Error(err))
+		}
+		return
+	}
+
+	req := pb.Request{
+		Method: "PUT",
+		Path:   membership.MemberAttributesStorePath(s.id), // /0/members/8e9e05c52164694d/attributes
+		Val:    string(b),
+	}
+	//fmt.Println(string(b), membership.MemberAttributesStorePath(s.id))
+
+	for {
+		ctx, cancel := context.WithTimeout(s.ctx, timeout) // WithTimeout , 发生超时了，这个时候cancel会自动调用
+		_, err := s.Do(ctx, req)
+		cancel()
+
+		switch err {
+		case nil:
+
+			close(s.readych) // 关闭s.readych ， 会发通知给如 embed/serve.go
+			if lg := s.getLogger(); lg != nil {
+				lg.Info(
+					"published local member to cluster through raft",
+					zap.String("local-member-id", s.ID().String()),
+					zap.String("local-member-attributes", fmt.Sprintf("%+v", s.attributes)),
+					zap.String("request-path", req.Path),
+					zap.String("cluster-id", s.cluster.ID().String()),
+					zap.Duration("publish-timeout", timeout),
+				)
+			}
+			return
+		}
+	}
+}
 
 //返回实现了ConsistentWatchableKV接口的对象
 func (s *EtcdServer) KV() mvcc.ConsistentWatchableKV { return s.kv }

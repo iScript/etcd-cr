@@ -13,7 +13,7 @@ func (i ID) String() string {
 
 // IDFromString attempts to create an ID from a base-16 string.
 func IDFromString(s string) (ID, error) {
-	i, err := strconv.ParseUint(s, 16, 64)
+	i, err := strconv.ParseUint(s, 16, 64) //以16进制解析s，保存为int64
 	return ID(i), err
 }
 

@@ -1,9 +1,11 @@
 package membership
 
 import (
+	"fmt"
 	"path"
 
 	"github.com/iScript/etcd-cr/mvcc/backend"
+	"github.com/iScript/etcd-cr/pkg/types"
 )
 
 const (
@@ -32,4 +34,25 @@ func mustCreateBackendBuckets(be backend.Backend) {
 	tx.UnsafeCreateBucket(membersBucketName)
 	tx.UnsafeCreateBucket(membersRemovedBucketName)
 	tx.UnsafeCreateBucket(clusterBucketName)
+}
+
+func MemberStoreKey(id types.ID) string {
+	return path.Join(StoreMembersPrefix, id.String())
+}
+
+func StoreClusterVersionKey() string {
+	return path.Join(storePrefix, "version")
+}
+
+func MemberAttributesStorePath(id types.ID) string {
+	return path.Join(MemberStoreKey(id), attributesSuffix)
+}
+
+func MustParseMemberIDFromKey(key string) types.ID {
+
+	id, err := types.IDFromString(path.Base(key)) //path.base 获取目录的最后一个 ， 即id
+	if err != nil {
+		fmt.Println("unexpected parse member id error: %v", err)
+	}
+	return id
 }

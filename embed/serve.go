@@ -2,11 +2,15 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
 
+	"github.com/iScript/etcd-cr/etcdserver"
 	"github.com/iScript/etcd-cr/pkg/debugutil"
+	"github.com/iScript/etcd-cr/pkg/transport"
+	"github.com/soheilhy/cmux"
 	"go.uber.org/zap"
 	"golang.org/x/net/trace"
 	"google.golang.org/grpc"
@@ -43,6 +47,25 @@ func newServeCtx(lg *zap.Logger) *serveCtx {
 		userHandlers: make(map[string]http.Handler),
 		serversC:     make(chan *servers, 2), // in case sctx.insecure,sctx.secure true
 	}
+}
+
+func (sctx *serveCtx) serve(
+	s *etcdserver.EtcdServer,
+	tlsinfo *transport.TLSInfo,
+	handler http.Handler,
+	errHandler func(error),
+	gopts ...grpc.ServerOption) (err error) {
+
+	//logger := defaultLog.New(ioutil.Discard, "etcdhttp", 0)
+
+	<-s.ReadyNotify() // 返回readych通道,这里会阻塞，等待readych通知 , 发通知地点为 server.go publish 结束
+	fmt.Println("2222")
+	if sctx.lg == nil {
+		fmt.Println("ready to serve client requests")
+	}
+
+	m := cmux.New(sctx.l)
+	return m.Serve() // 开始监听 , 这里监听着，一直没返回，所以不会触发etcdmain里的通道
 }
 
 // 返回一个http.handle 用于grpc
