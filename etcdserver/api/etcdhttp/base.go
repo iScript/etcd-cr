@@ -40,6 +40,9 @@ func versionHandler(c api.Cluster, fn func(http.ResponseWriter, *http.Request, s
 }
 
 func serveVersion(w http.ResponseWriter, r *http.Request, clusterV string) {
+	fmt.Println("serveVersioin")
+
+	//
 	if !allowMethod(w, r, "GET") {
 		return
 	}

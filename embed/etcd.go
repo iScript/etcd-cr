@@ -588,9 +588,9 @@ func (e *Etcd) serveClients() (err error) {
 
 	} else { // 只提供基本的查询功能，不能响应client的请求
 		fmt.Println("enablev2 false")
-		mux := http.NewServeMux()
-		etcdhttp.HandleBasic(mux, e.Server)
-		h = mux
+		mux := http.NewServeMux()           // 相当于一个路由管理器
+		etcdhttp.HandleBasic(mux, e.Server) // 设置基本路由，如/versioin
+		h = mux                             // ServeMux同时也实现了ServeHTTP方法，因此代码中的mux也是一种handler
 	}
 
 	// grpc 相关配置

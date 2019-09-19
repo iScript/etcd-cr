@@ -16,6 +16,7 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.0.0
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
+	github.com/grpc-ecosystem/grpc-gateway v1.11.1
 	github.com/jonboulle/clockwork v0.1.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
