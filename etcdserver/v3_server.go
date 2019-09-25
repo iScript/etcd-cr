@@ -14,10 +14,24 @@ const (
 	maxGapBetweenApplyAndCommitIndex = 5000
 )
 
+//提供给grpc的相关方法
 type RaftKV interface {
 	Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error)
-	// Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse, error)
+	Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse, error)
 	// DeleteRange(ctx context.Context, r *pb.DeleteRangeRequest) (*pb.DeleteRangeResponse, error)
 	// Txn(ctx context.Context, r *pb.TxnRequest) (*pb.TxnResponse, error)
 	// Compact(ctx context.Context, r *pb.CompactionRequest) (*pb.CompactionResponse, error)
+}
+
+func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error) {
+	return nil, nil
+}
+
+func (s *EtcdServer) Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse, error) {
+	return nil, nil
+	// resp, err := s.raftRequest(ctx, pb.InternalRaftRequest{Put: r})
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// return resp.(*pb.PutResponse), nil
 }

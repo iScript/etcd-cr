@@ -7,7 +7,7 @@ import (
 )
 
 type quotaKVServer struct {
-	pb.KVServer //接口，该变量可以存任意实现了该接口的对象
+	pb.KVServer //接口，该变量可以存任意实现了该接口的对象，主要是这里，返回grpc相关方法
 	qa          quotaAlarmer
 }
 

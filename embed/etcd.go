@@ -621,7 +621,6 @@ func (e *Etcd) serveClients() (err error) {
 
 // 错误处理
 func (e *Etcd) errHandler(err error) {
-	fmt.Println(err, 112233333)
 	select {
 	case <-e.stopc:
 		return

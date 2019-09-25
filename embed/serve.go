@@ -12,9 +12,11 @@ import (
 	gw "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/iScript/etcd-cr/etcdserver"
 	"github.com/iScript/etcd-cr/etcdserver/api/v3rpc"
+	etcdservergw "github.com/iScript/etcd-cr/etcdserver/etcdserverpb"
 	"github.com/iScript/etcd-cr/pkg/debugutil"
 	"github.com/iScript/etcd-cr/pkg/transport"
 	"github.com/soheilhy/cmux"
+	"github.com/tmc/grpc-websocket-proxy/wsproxy"
 	"go.uber.org/zap"
 	"golang.org/x/net/trace"
 	"google.golang.org/grpc"
@@ -99,15 +101,21 @@ func (sctx *serveCtx) serve(
 			sctx.serviceRegister(gs)
 		}
 
+		grpcl := m.Match(cmux.HTTP2())
+		go func() { errHandler(gs.Serve(grpcl)) }()
+
 		var gwmux *gw.ServeMux
+
 		if s.Cfg.EnableGRPCGateway {
-			// gwmux, err = sctx.registerGateway([]grpc.DialOption{grpc.WithInsecure()})
-			// if err != nil {
-			// 	return err
-			// }
+			// 命令行flag中默认为true，EnableGRPCGateway
+
+			gwmux, err = sctx.registerGateway([]grpc.DialOption{grpc.WithInsecure()})
+			if err != nil {
+				return err
+			}
 		}
 
-		httpmux := sctx.createMux(gwmux, handler)
+		httpmux := sctx.createMux(gwmux, handler) // grpc 和http handle
 		srvhttp := &http.Server{
 			Handler:  createAccessController(sctx.lg, s, httpmux),
 			ErrorLog: logger, // do not log user error
@@ -145,25 +153,77 @@ func grpcHandlerFunc(grpcServer *grpc.Server, otherHandler http.Handler) http.Ha
 	})
 }
 
+type registerHandlerFunc func(context.Context, *gw.ServeMux, *grpc.ClientConn) error
+
+func (sctx *serveCtx) registerGateway(opts []grpc.DialOption) (*gw.ServeMux, error) {
+	ctx := sctx.ctx
+	addr := sctx.addr
+
+	if network := sctx.network; network == "unix" {
+		// explicitly define unix network for gRPC socket support
+		addr = fmt.Sprintf("%s://%s", network, addr)
+	}
+
+	conn, err := grpc.DialContext(ctx, addr, opts...)
+
+	if err != nil {
+		return nil, err
+	}
+	gwmux := gw.NewServeMux()
+
+	handlers := []registerHandlerFunc{
+		etcdservergw.RegisterKVHandler,
+		// etcdservergw.RegisterWatchHandler,
+		// etcdservergw.RegisterLeaseHandler,
+		// etcdservergw.RegisterClusterHandler,
+		// etcdservergw.RegisterMaintenanceHandler,
+		// etcdservergw.RegisterAuthHandler,
+		// v3lockgw.RegisterLockHandler,
+		// v3electiongw.RegisterElectionHandler,
+	}
+
+	for _, h := range handlers {
+		if err := h(ctx, gwmux, conn); err != nil {
+			return nil, err
+		}
+	}
+
+	// 监听结束
+	go func() {
+		<-ctx.Done()
+		if cerr := conn.Close(); cerr != nil {
+			if sctx.lg != nil {
+				sctx.lg.Warn(
+					"failed to close connection",
+					zap.String("address", sctx.l.Addr().String()),
+					zap.Error(cerr),
+				)
+			}
+		}
+	}()
+
+	return gwmux, nil
+}
+
 func (sctx *serveCtx) createMux(gwmux *gw.ServeMux, handler http.Handler) *http.ServeMux {
 	httpmux := http.NewServeMux()
 	for path, h := range sctx.userHandlers {
 		httpmux.Handle(path, h)
 	}
 	if gwmux != nil {
-		// httpmux.Handle(
-		// 	"/v3/",
-		// 	wsproxy.WebsocketProxy(
-		// 		gwmux,
-		// 		wsproxy.WithRequestMutator(
-		// 			// Default to the POST method for streams
-		// 			func(_ *http.Request, outgoing *http.Request) *http.Request {
-		// 				outgoing.Method = "POST"
-		// 				return outgoing
-		// 			},
-		// 		),
-		// 	),
-		// )
+		httpmux.Handle(
+			"/v3/",
+			wsproxy.WebsocketProxy(
+				gwmux,
+				wsproxy.WithRequestMutator(
+					// Default to the POST method for streams
+					func(_ *http.Request, outgoing *http.Request) *http.Request {
+						outgoing.Method = "POST"
+						return outgoing
+					},
+				),
+			),
+		)
 	}
 	if handler != nil {
 		httpmux.Handle("/", handler)

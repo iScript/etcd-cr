@@ -49,7 +49,7 @@ func Server(s *etcdserver.EtcdServer, tls *tls.Config, gopts ...grpc.ServerOptio
 	// 创建一个grpc server
 	grpcServer := grpc.NewServer(append(opts, gopts...)...) // 3个点，切片被打散传入
 
-	pb.RegisterKVServer(grpcServer, NewQuotaKVServer(s)) // 注册服务，传入实现了KVServer接口的对象
+	pb.RegisterKVServer(grpcServer, NewQuotaKVServer(s)) // 注册服务，传入实现了KVServer接口的对象,如put range
 
 	fmt.Println("return grpc server")
 	return grpcServer

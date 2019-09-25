@@ -225,7 +225,7 @@ type Config struct {
 	loggerCore        zapcore.Core
 	loggerWriteSyncer zapcore.WriteSyncer
 
-	// EnableGRPCGateway is false to disable grpc gateway.
+	// 是否开启grpc转http
 	EnableGRPCGateway bool `json:"enable-grpc-gateway"`
 
 	// TO BE DEPRECATED
@@ -293,6 +293,7 @@ func NewConfig() *Config {
 	}
 
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
+
 	return cfg
 }
 

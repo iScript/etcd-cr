@@ -25,8 +25,9 @@ func (cfg *Config) setupLogging() error {
 		for _, v := range cfg.LogOutputs {
 			switch v {
 			case DefaultLogOutput:
-				outputPaths = append(outputPaths, StdErrLogOutput)
+				outputPaths = append(outputPaths, StdErrLogOutput) //
 				errOutputPaths = append(errOutputPaths, StdErrLogOutput)
+				//fmt.Println(cfg.LogOutputs)  default
 			// case JournalLogOutput:
 			// 	isJournal = true
 			case StdErrLogOutput:
@@ -43,8 +44,13 @@ func (cfg *Config) setupLogging() error {
 			}
 		}
 
-		// 返回zap.Config  , 更新默认config的outpath
-		copied := logutil.AddOutputPaths(logutil.DefaultZapLoggerConfig, outputPaths, errOutputPaths)
+		// 默认zap配置
+		copied := logutil.DefaultZapLoggerConfig
+		copied.OutputPaths = outputPaths
+		copied.ErrorOutputPaths = errOutputPaths
+		copied = logutil.MergeOutputPaths(copied)
+		//copied.Level = zap.NewAtomicLevelAt(logutil.ConvertToZapLevel(cfg.LogLevel))
+
 		if cfg.Debug {
 			copied.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
 			// grpc.EnableTracing = true
