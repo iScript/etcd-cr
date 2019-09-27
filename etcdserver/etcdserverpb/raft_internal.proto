@@ -1,0 +1,34 @@
+syntax = "proto3";
+package etcdserverpb;
+
+
+import "gogoproto/gogo.proto";
+import "rpc.proto";
+import "etcdserver.proto";
+
+option (gogoproto.marshaler_all) = true;
+option (gogoproto.sizer_all) = true;
+option (gogoproto.unmarshaler_all) = true;
+option (gogoproto.goproto_getters_all) = false;
+
+message RequestHeader {
+    uint64 ID = 1;
+    // username is a username that is associated with an auth token of gRPC connection
+    string username = 2;
+    // auth_revision is a revision number of auth.authStore. It is not related to mvcc
+    uint64 auth_revision = 3;
+}
+
+// An InternalRaftRequest is the union of all requests which can be
+// sent via raft.
+message InternalRaftRequest {
+    RequestHeader header = 100;
+    uint64 ID = 1;
+  
+    Request v2 = 2;
+  
+    // RangeRequest range = 3;
+    PutRequest put = 4;
+
+}
+

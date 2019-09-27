@@ -2,7 +2,12 @@
 syntax = "proto3";
 package etcdserverpb;
 
+import "gogoproto/gogo.proto";
 import "google/api/annotations.proto";
+import "etcd-cr/mvcc/mvccpb/kv.proto";
+
+option (gogoproto.marshaler_all) = true;
+option (gogoproto.unmarshaler_all) = true;
 
 service KV {
     // Range gets the keys in the range from the key-value store.
@@ -141,5 +146,5 @@ message PutRequest {
   message PutResponse {
     ResponseHeader header = 1;
     // if prev_kv is set in the request, the previous key-value pair will be returned.
-    //mvccpb.KeyValue prev_kv = 2;
+    mvccpb.KeyValue prev_kv = 2;
   }

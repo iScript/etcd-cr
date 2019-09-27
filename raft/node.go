@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -80,7 +81,7 @@ type Node interface {
 	//Campaign(ctx context.Context) error
 
 	// 收到Client发来的写请求时，调用Propose方法进行处理
-	//Propose(ctx context.Context, data []byte) error
+	Propose(ctx context.Context, data []byte) error
 
 	// 收到Client发送的修改集群配置的请求
 	//ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
@@ -270,4 +271,11 @@ func (n *node) run() {
 		}
 
 	}
+}
+
+// 收到客户端写请求
+func (n *node) Propose(ctx context.Context, data []byte) error {
+
+	return nil
+	//return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: data}}})
 }

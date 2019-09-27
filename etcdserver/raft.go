@@ -74,7 +74,7 @@ type raftNodeConfig struct {
 	lg *zap.Logger
 
 	isIDRemoved func(id uint64) bool //检测接收者是否已经从集群中删除
-	raft.Node
+	raft.Node                        // 接口，raftNode必须实现接口，在raft/node.go 实现
 	raftStorage *raft.MemoryStorage
 	storage     Storage
 	heartbeat   time.Duration // for logging
@@ -112,7 +112,6 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 		r.ticker = time.NewTicker(r.heartbeat)
 	}
 	return r
-	return nil
 }
 
 // raft.Node does not have locks in Raft package

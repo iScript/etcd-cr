@@ -3,13 +3,13 @@ package etcdserverpb;
 
 import "gogoproto/gogo.proto";
 
-option (gogoproto.marshaler_all) = true;
-option (gogoproto.sizer_all) = true;
-option (gogoproto.unmarshaler_all) = true;
-option (gogoproto.goproto_getters_all) = false;
+option (gogoproto.marshaler_all) = true;    // 为相关message生成marshaler method
+option (gogoproto.sizer_all) = true;        // 为相关message生成size method
+option (gogoproto.unmarshaler_all) = true;  // 为相关message生成unmarshaler method
+option (gogoproto.goproto_getters_all) = false; // 为相关message生成get method
 
 message Request {
-	optional uint64 ID         =  1 [(gogoproto.nullable) = false];
+	optional uint64 ID         =  1 [(gogoproto.nullable) = false]; //nullable默认为true，若设置为false，生成的字段没有指针
 	optional string Method     =  2 [(gogoproto.nullable) = false];
 	optional string Path       =  3 [(gogoproto.nullable) = false];
 	optional string Val        =  4 [(gogoproto.nullable) = false];

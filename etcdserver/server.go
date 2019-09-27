@@ -343,7 +343,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			raftNodeConfig{
 				lg:          cfg.Logger,
 				isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
-				Node:        n,
+				Node:        n, // n实现了Node接口
 				heartbeat:   heartbeat,
 				raftStorage: s,
 				storage:     NewStorage(w, ss),

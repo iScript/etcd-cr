@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/iScript/etcd-cr/etcdserver"
+	"github.com/iScript/etcd-cr/etcdserver/api/v3rpc/rpctypes"
 	pb "github.com/iScript/etcd-cr/etcdserver/etcdserverpb"
 )
 
@@ -30,5 +31,35 @@ func (s *kvServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResp
 
 func (s *kvServer) Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse, error) {
 	//fmt.Println("12312312") // 能收到grpc请求
-	return nil, nil
+	if err := checkPutRequest(r); err != nil {
+		return nil, err
+	}
+	// s.kv是实现了etcdserver.RaftKV接口的， v3_server中etcdserver实现了相关接口
+	_, err := s.kv.Put(ctx, r)
+	return nil, err
+}
+
+func checkRangeRequest(r *pb.RangeRequest) error {
+	// key byte类型，是否有key
+	if len(r.Key) == 0 {
+		return rpctypes.ErrGRPCEmptyKey
+	}
+	return nil
+}
+
+func checkPutRequest(r *pb.PutRequest) error {
+
+	// key byte类型，是否有key
+	if len(r.Key) == 0 {
+		return rpctypes.ErrGRPCEmptyKey
+	}
+	// 同时传了ignore和值
+	if r.IgnoreValue && len(r.Value) != 0 {
+		return rpctypes.ErrGRPCValueProvided
+	}
+	// 同时传了ignore和值
+	if r.IgnoreLease && r.Lease != 0 {
+		return rpctypes.ErrGRPCLeaseProvided
+	}
+	return nil
 }
