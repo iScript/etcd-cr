@@ -25,7 +25,7 @@ type Config struct {
 	Learners map[uint64]struct{}
 }
 
-// ProgressTracker追踪当前的活动配置即其他信息
+// ProgressTracker追踪当前的活动配置及其他信息
 type ProgressTracker struct {
 	Config
 
@@ -37,6 +37,7 @@ type ProgressTracker struct {
 }
 
 // 初始化ProgressTracker.
+// 参数maxInflight 已经发送出去但未收到响应的消息个数上限
 func MakeProgressTracker(maxInflight int) ProgressTracker {
 	p := ProgressTracker{
 		MaxInflight: maxInflight,
@@ -55,9 +56,28 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 	return p
 }
 
-// 重置votes
-func (p *ProgressTracker) ResetVotes() {
-	p.Votes = map[uint64]bool{}
+// 为tracked progresses调用函数f
+func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
+	n := len(p.Progress)
+
+	// We need to sort the IDs and don't want to allocate since this is hot code.
+	// The optimization here mirrors that in `(MajorityConfig).CommittedIndex`,
+	// see there for details.
+	var sl [7]uint64
+	ids := sl[:]
+	if len(sl) >= n {
+		ids = sl[:n]
+	} else {
+		ids = make([]uint64, n)
+	}
+	for id := range p.Progress {
+		n--
+		ids[n] = id
+	}
+	//insertionSort(ids)
+	for _, id := range ids {
+		f(id, p.Progress[id])
+	}
 }
 
 // VoterNodes returns a sorted slice of voters.
@@ -70,4 +90,22 @@ func (p *ProgressTracker) VoterNodes() []uint64 {
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
 	return nodes
+}
+
+// LearnerNodes returns a sorted slice of learners.
+func (p *ProgressTracker) LearnerNodes() []uint64 {
+	if len(p.Learners) == 0 {
+		return nil
+	}
+	nodes := make([]uint64, 0, len(p.Learners))
+	for id := range p.Learners {
+		nodes = append(nodes, id)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
+	return nodes
+}
+
+// 重置votes
+func (p *ProgressTracker) ResetVotes() {
+	p.Votes = map[uint64]bool{}
 }

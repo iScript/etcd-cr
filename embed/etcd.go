@@ -178,6 +178,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		EnableGRPCGateway:     cfg.EnableGRPCGateway,
 		EnableLeaseCheckpoint: cfg.ExperimentalEnableLeaseCheckpoint,
 	}
+
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
 
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {

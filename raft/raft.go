@@ -253,7 +253,12 @@ func newRaft(c *Config) *raft {
 
 	// 创建raftlog实例
 	raftlog := newLogWithSize(c.Storage, c.Logger, c.MaxCommittedSizePerReady)
-	hs, cs, err := c.Storage.InitialState() // 返回storage初始状态信息
+
+	// c.storage = raft.NewMemoryStorage()
+	// 返回storage初始状态信息， hardstate、confstate、error
+	hs, cs, err := c.Storage.InitialState()
+	//fmt.Println(hs, cs, 999999999)
+
 	if err != nil {
 		panic(err)
 	}
@@ -270,7 +275,7 @@ func newRaft(c *Config) *raft {
 		raftLog:                   raftlog,
 		maxMsgSize:                c.MaxSizePerMsg,
 		maxUncommittedSize:        c.MaxUncommittedEntriesSize,
-		prs:                       tracker.MakeProgressTracker(c.MaxInflightMsgs),
+		prs:                       tracker.MakeProgressTracker(c.MaxInflightMsgs), // 返回ProgressTracker
 		electionTimeout:           c.ElectionTick,
 		heartbeatTimeout:          c.HeartbeatTick,
 		logger:                    c.Logger,
@@ -280,11 +285,15 @@ func newRaft(c *Config) *raft {
 		disableProposalForwarding: c.DisableProposalForwarding,
 	}
 
-	// for _, p := range peers {
-
+	// _, _, err := confchange.Restore(confchange.Changer{
+	// 	Tracker:   r.prs,
+	// 	LastIndex: raftlog.lastIndex(),
+	// }, cs)
+	// if err != nil {
+	// 	panic(err)
 	// }
 
-	// 如果不为空
+	// 如果不为空  (刚开始为空)
 	if !isHardStateEqual(hs, emptyState) {
 		r.loadState(hs)
 	}
@@ -340,30 +349,32 @@ func (r *raft) reset(term uint64) {
 	r.prs.ResetVotes()
 
 	// 重置prs，其中每个progress中的next设置为raftlog.lastIndex
-	// r.prs.Visit(func(id uint64, pr *tracker.Progress) {
-	// 	*pr = tracker.Progress{
-	// 		Match:     0,
-	// 		Next:      r.raftLog.lastIndex() + 1,
-	// 		Inflights: tracker.NewInflights(r.prs.MaxInflight),
-	// 		IsLearner: pr.IsLearner,
-	// 	}
-	// 	if id == r.id {
-	// 		pr.Match = r.raftLog.lastIndex()
-	// 	}
-	// })
+	r.prs.Visit(func(id uint64, pr *tracker.Progress) {
+		*pr = tracker.Progress{
+			Match:     0,
+			Next:      r.raftLog.lastIndex() + 1,
+			Inflights: tracker.NewInflights(r.prs.MaxInflight),
+			IsLearner: pr.IsLearner,
+		}
+		if id == r.id {
+			pr.Match = r.raftLog.lastIndex()
+		}
+	})
 
 	r.pendingConfIndex = 0
 	r.uncommittedSize = 0
 	r.readOnly = newReadOnly(r.readOnly.option)
 }
 
-// 周期性地调用该方法推进electionElapsed并检测是否超时
+// 周期性地调用该方法推进electionElapsed并检测是否超时,follower时
 func (r *raft) tickElection() {
 	r.electionElapsed++
-
+	//fmt.Println("选举时间", r.electionElapsed, r.randomizedElectionTimeout, r.promotable(), r.pastElectionTimeout())
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0 //重置
 		// 发起选举
+
+		fmt.Println("发起选举~~~")
 		//r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
@@ -387,7 +398,7 @@ func (r *raft) Step(m pb.Message) error {
 func (r *raft) resetRandomizedElectionTimeout() {
 	//electionTimeout = ElectionTick 默认为10
 	r.randomizedElectionTimeout = r.electionTimeout + globalRand.Intn(r.electionTimeout)
-	//fmt.Println(r.randomizedElectionTimeout)
+
 }
 
 func (r *raft) sendTimeoutNow(to uint64) {
@@ -402,8 +413,8 @@ func (r *raft) abortLeaderTransfer() {
 // 标示状态机是否可提升为leader,
 func (r *raft) promotable() bool {
 	pr := r.prs.Progress[r.id]
+	//fmt.Println(r.prs, 789789)
 	return pr != nil && !pr.IsLearner
-	//return false
 }
 
 // func (r *raft) applyConfChange(cc pb.ConfChangeV2) pb.ConfState {

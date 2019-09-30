@@ -1,6 +1,28 @@
 package raft
 
-import pb "github.com/iScript/etcd-cr/raft/raftpb"
+import (
+	"fmt"
+
+	pb "github.com/iScript/etcd-cr/raft/raftpb"
+)
+
+func (st StateType) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%q", st.String())), nil
+}
+
+func min(a, b uint64) uint64 {
+	if a > b {
+		return b
+	}
+	return a
+}
+
+func max(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 // 限定entry总的字节数
 func limitSize(ents []pb.Entry, maxSize uint64) []pb.Entry {

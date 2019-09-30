@@ -365,7 +365,7 @@ func (cfg Config) InitialClusterFromName(name string) (ret string) {
 }
 
 func (cfg Config) IsNewCluster() bool { return cfg.ClusterState == ClusterStateFlagNew }
-func (cfg Config) ElectionTicks() int { return int(cfg.ElectionMs / cfg.TickMs) }
+func (cfg Config) ElectionTicks() int { return int(cfg.ElectionMs / cfg.TickMs) } // 默认1000除100=10
 
 // 是否为默认的peerHost ， 数组里就一个值且值为默认http://localhost:2380
 func (cfg Config) defaultPeerHost() bool {

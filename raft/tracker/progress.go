@@ -22,7 +22,7 @@ type Progress struct {
 	ProbeSent bool
 
 	// 记录了已经发送出去但未收到响应的消息信息
-	//Inflights *Inflights
+	Inflights *Inflights
 
 	// IsLearner is true if this progress is tracked for a learner.
 	IsLearner bool

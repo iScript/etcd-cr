@@ -74,7 +74,7 @@ type raftNodeConfig struct {
 	lg *zap.Logger
 
 	isIDRemoved func(id uint64) bool //检测接收者是否已经从集群中删除
-	raft.Node                        // 接口，raftNode必须实现接口，在raft/node.go 实现
+	raft.Node                        // 接口，该字段需要实现接口，在raft/node.go 实现
 	raftStorage *raft.MemoryStorage
 	storage     Storage
 	heartbeat   time.Duration // for logging
@@ -106,20 +106,22 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 		stopped:    make(chan struct{}),
 		done:       make(chan struct{}),
 	}
+
+	// heartbeat 100ms , 在server中的raftNodeConfig传入
 	if r.heartbeat == 0 {
 		r.ticker = &time.Ticker{}
 	} else {
-		r.ticker = time.NewTicker(r.heartbeat)
+		r.ticker = time.NewTicker(r.heartbeat) // 创建100ms定时器,会在每100ms向自身的C字段通道发送当前时间
 	}
 	return r
 }
 
-// raft.Node does not have locks in Raft package
-// func (r *raftNode) tick() {
-// 	r.tickMu.Lock()
-// 	r.Tick()
-// 	r.tickMu.Unlock()
-// }
+// 推进逻辑时钟
+func (r *raftNode) tick() {
+	r.tickMu.Lock()
+	r.Tick() //Node接口的tick
+	r.tickMu.Unlock()
+}
 
 // 在一个新的goroutine中启动raftnode
 // 在etcdserver run()中调用
@@ -127,12 +129,52 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 	//internalTimeout := time.Second //1s
 
 	go func() {
-		//...
+		defer r.onStop()
+		//islead := false
+
+		for {
+			select {
+			case <-r.ticker.C: // 100ms的定时器，推进逻辑时钟
+				r.tick()
+			case rd := <-r.Ready(): //Node Ready接口，返回node.readyc
+				fmt.Println("node ready:", rd)
+				fmt.Println("node ready:", rd)
+				//
+			case <-r.stopped:
+				return
+
+			}
+		}
 	}()
 }
 
 func (r *raftNode) apply() chan apply {
 	return r.applyc
+}
+
+func (r *raftNode) onStop() {
+	// r.Stop()
+	// r.ticker.Stop()
+	// r.transport.Stop()
+	// if err := r.storage.Close(); err != nil {
+	// 	if r.lg != nil {
+	// 		r.lg.Panic("failed to close Raft storage", zap.Error(err))
+	// 	} else {
+	// 		plog.Panicf("raft close storage error: %v", err)
+	// 	}
+	// }
+	// close(r.done)
+}
+
+// advanceTicks advances ticks of Raft node.
+// This can be used for fast-forwarding election
+// ticks in multi data-center deployments, thus
+// speeding up election process.
+// 快速推进逻辑时钟。
+func (r *raftNode) advanceTicks(ticks int) {
+	for i := 0; i < ticks; i++ {
+		r.tick()
+	}
 }
 
 //
@@ -200,6 +242,7 @@ func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id
 
 	// peers默认一个本机
 	if len(peers) == 0 {
+		fmt.Println("111")
 		//raft.RestartNode(c)
 	} else {
 		n = raft.StartNode(c, peers)

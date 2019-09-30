@@ -72,10 +72,15 @@ func IsEmptyHardState(st pb.HardState) bool {
 	return isHardStateEqual(st, emptyState)
 }
 
+// snapshot是否为空.
+func IsEmptySnap(sp pb.Snapshot) bool {
+	return sp.Metadata.Index == 0
+}
+
 // Node 接口
 type Node interface {
 	//推进逻辑时钟，即选举计时器和心跳计时器
-	//Tick()
+	Tick()
 
 	// 选举计时器超时后会调用该方法，将当前节点切换成Candidate状态
 	//Campaign(ctx context.Context) error
@@ -94,7 +99,7 @@ type Node interface {
 	//
 	// NOTE: No committed entries from the next Ready may be applied until all committed entries
 	// and snapshots from the previous one have finished.
-	//Ready() <-chan Ready
+	Ready() <-chan Ready
 
 	// Advance notifies the Node that the application has saved progress up to the last Ready.
 	// It prepares the node to return the next available Ready.
@@ -149,7 +154,6 @@ type Peer struct {
 
 // 通过config和peer启动一台node （第二个参数记录了当前集群中全部节点的id）
 func StartNode(c *Config, peers []Peer) Node {
-	fmt.Println("raft.node.StartNode")
 
 	if len(peers) == 0 {
 		// panic 主动抛出错误，立即返回
@@ -160,6 +164,7 @@ func StartNode(c *Config, peers []Peer) Node {
 	if err != nil {
 		panic(err)
 	}
+
 	rn.Bootstrap(peers) //
 	n := newNode(rn)
 	go n.run()
@@ -218,25 +223,28 @@ func newNode(rn *RawNode) node {
 
 // 处理node中封装的全部通道
 func (n *node) run() {
+
 	var propc chan msgWithResult
 	var readyc chan Ready
 	var advancec chan struct{}
 	var rd Ready
 
-	r := n.rn.raft
+	r := n.rn.raft // rn  rawnode
 	lead := None
 
 	for {
+
 		if advancec != nil {
 			readyc = nil
-		}
-		// else if n.rn.HasReady() {
+		} else if n.rn.HasReady() {
 
-		// 	rd = n.rn.readyWithoutAccept()
-		// 	readyc = n.readyc
-		// }
+			//rd = n.rn.readyWithoutAccept() // 创建一个ready实例
+			//readyc = n.readyc
+		}
 
 		// r.lead 不为none
+
+		// 刚开始都为none即0 ， 不执行
 		if lead != r.lead {
 			if r.hasLeader() {
 				if lead == None {
@@ -252,8 +260,11 @@ func (n *node) run() {
 			lead = r.lead
 		}
 
+		//fmt.Println("开始监听,", propc) //这里propc是nil到时通道无效
+
 		select {
 		case pm := <-propc: //读取propc通道，获取MsgPropc消息，并交给raft.Step处理
+			fmt.Println("获取到MsgProp类型的消息")
 			m := pm.m
 			m.From = r.id
 			err := r.Step(m)
@@ -261,10 +272,14 @@ func (n *node) run() {
 				pm.result <- err
 				close(pm.result)
 			}
-		case readyc <- rd:
+		case <-n.tickc:
+			n.rn.Tick()
+		case readyc <- rd: //将前面创建的ready实例写入通道，等待上层模块处理
+			//fmt.Println("readycreadycreadycreadyc")
 			//n.rn.acceptReady(rd)
 			//advancec = n.advancec
 		case <-advancec:
+			//fmt.Println("advancecadvancecadvancec")
 			// n.rn.Advance(rd)
 			// rd = Ready{}
 			// advancec = nil
@@ -273,9 +288,106 @@ func (n *node) run() {
 	}
 }
 
-// 收到客户端写请求
+// 推进逻辑时钟，在etcdserver/raft 中的定时器推进
+func (n *node) Tick() {
+
+	select {
+	case n.tickc <- struct{}{}:
+	case <-n.done:
+	default:
+		n.rn.raft.logger.Warningf("%x (leader %v) A tick missed to fire. Node blocks too long!", n.rn.raft.id, n.rn.raft.id == n.rn.raft.lead)
+	}
+}
+
+// 收到客户端写请求，处理
 func (n *node) Propose(ctx context.Context, data []byte) error {
+	return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: data}}})
+}
+
+func (n *node) stepWait(ctx context.Context, m pb.Message) error {
+	return n.stepWithWaitOption(ctx, m, true)
+}
+
+func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) error {
+
+	if m.Type != pb.MsgProp { //type = 2
+		select {
+		case n.recvc <- m:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-n.done:
+			return ErrStopped
+		}
+	}
+
+	ch := n.propc
+	pm := msgWithResult{m: m}
+
+	if wait {
+		pm.result = make(chan error, 1)
+	}
+	fmt.Println("写入propc数据888888", ch)
+	//处理监听
+	select {
+	case ch <- pm: //如果成功向ch写入数据，ch可能会阻塞？
+		fmt.Println("写入propc数据~~~~")
+		if !wait {
+			return nil
+		}
+	case <-ctx.Done():
+		fmt.Println("done1~")
+		return ctx.Err()
+	case <-n.done:
+		fmt.Println("done2")
+		return ErrStopped
+	}
+
+	select {
+	case err := <-pm.result:
+		if err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-n.done:
+		return ErrStopped
+	}
 
 	return nil
-	//return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: data}}})
+}
+
+func (n *node) Ready() <-chan Ready { return n.readyc }
+
+func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
+	rd := Ready{
+		Entries:          r.raftLog.unstableEntries(),
+		CommittedEntries: r.raftLog.nextEnts(),
+		Messages:         r.msgs,
+	}
+	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
+		rd.SoftState = softSt
+	}
+	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
+		rd.HardState = hardSt
+	}
+	if r.raftLog.unstable.snapshot != nil {
+		rd.Snapshot = *r.raftLog.unstable.snapshot
+	}
+	if len(r.readStates) != 0 {
+		rd.ReadStates = r.readStates
+	}
+	rd.MustSync = MustSync(r.hardState(), prevHardSt, len(rd.Entries))
+	return rd
+}
+
+// MustSync returns true if the hard state and count of Raft entries indicate
+// that a synchronous write to persistent storage is required.
+func MustSync(st, prevst pb.HardState, entsnum int) bool {
+	// Persistent state on all servers:
+	// (Updated on stable storage before responding to RPCs)
+	// currentTerm
+	// votedFor
+	// log entries[]
+	return entsnum != 0 || st.Vote != prevst.Vote || st.Term != prevst.Term
 }

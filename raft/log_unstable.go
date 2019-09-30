@@ -91,4 +91,18 @@ func (u *unstable) shrinkEntriesArray() {
 	}
 }
 
-// ....
+func (u *unstable) slice(lo uint64, hi uint64) []pb.Entry {
+	u.mustCheckOutOfBounds(lo, hi)
+	return u.entries[lo-u.offset : hi-u.offset]
+}
+
+// u.offset <= lo <= hi <= u.offset+len(u.entries)
+func (u *unstable) mustCheckOutOfBounds(lo, hi uint64) {
+	if lo > hi {
+		u.logger.Panicf("invalid unstable.slice %d > %d", lo, hi)
+	}
+	upper := u.offset + uint64(len(u.entries))
+	if lo < u.offset || hi > upper {
+		u.logger.Panicf("unstable.slice[%d,%d) out of bound [%d,%d]", lo, hi, u.offset, upper)
+	}
+}

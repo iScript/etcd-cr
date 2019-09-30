@@ -3,6 +3,8 @@ package raft
 import (
 	"fmt"
 	"log"
+
+	pb "github.com/iScript/etcd-cr/raft/raftpb"
 )
 
 // 管理节点上的日志
@@ -65,6 +67,35 @@ func (l *raftLog) String() string {
 	return fmt.Sprintf("committed=%d, applied=%d, unstable.offset=%d, len(unstable.Entries)=%d", l.committed, l.applied, l.unstable.offset, len(l.unstable.entries))
 }
 
+func (l *raftLog) unstableEntries() []pb.Entry {
+	if len(l.unstable.entries) == 0 {
+		return nil
+	}
+	return l.unstable.entries
+}
+
+// nextEnts returns all the available entries for execution.
+// If applied is smaller than the index of snapshot, it returns all committed
+// entries after the index of snapshot.
+func (l *raftLog) nextEnts() (ents []pb.Entry) {
+	off := max(l.applied+1, l.firstIndex())
+	if l.committed+1 > off {
+		ents, err := l.slice(off, l.committed+1, l.maxNextEntsSize)
+		if err != nil {
+			l.logger.Panicf("unexpected error when getting unapplied entries (%v)", err)
+		}
+		return ents
+	}
+	return nil
+}
+
+// hasNextEnts returns if there is any available entries for execution. This
+// is a fast check without heavy raftLog.slice() in raftLog.nextEnts().
+func (l *raftLog) hasNextEnts() bool {
+	off := max(l.applied+1, l.firstIndex())
+	return l.committed+1 > off
+}
+
 func (l *raftLog) firstIndex() uint64 {
 	if i, ok := l.unstable.maybeFirstIndex(); ok {
 		return i
@@ -119,4 +150,62 @@ func (l *raftLog) term(i uint64) (uint64, error) {
 		return 0, err
 	}
 	panic(err) // TODO(bdarnell)
+}
+
+// slice returns a slice of log entries from lo through hi-1, inclusive.
+func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
+	err := l.mustCheckOutOfBounds(lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	if lo == hi {
+		return nil, nil
+	}
+	var ents []pb.Entry
+	if lo < l.unstable.offset {
+		storedEnts, err := l.storage.Entries(lo, min(hi, l.unstable.offset), maxSize)
+		if err == ErrCompacted {
+			return nil, err
+		} else if err == ErrUnavailable {
+			l.logger.Panicf("entries[%d:%d) is unavailable from storage", lo, min(hi, l.unstable.offset))
+		} else if err != nil {
+			panic(err) // TODO(bdarnell)
+		}
+
+		// check if ents has reached the size limitation
+		if uint64(len(storedEnts)) < min(hi, l.unstable.offset)-lo {
+			return storedEnts, nil
+		}
+
+		ents = storedEnts
+	}
+	if hi > l.unstable.offset {
+		unstable := l.unstable.slice(max(lo, l.unstable.offset), hi)
+		if len(ents) > 0 {
+			combined := make([]pb.Entry, len(ents)+len(unstable))
+			n := copy(combined, ents)
+			copy(combined[n:], unstable)
+			ents = combined
+		} else {
+			ents = unstable
+		}
+	}
+	return limitSize(ents, maxSize), nil
+}
+
+// l.firstIndex <= lo <= hi <= l.firstIndex + len(l.entries)
+func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
+	if lo > hi {
+		l.logger.Panicf("invalid slice %d > %d", lo, hi)
+	}
+	fi := l.firstIndex()
+	if lo < fi {
+		return ErrCompacted
+	}
+
+	length := l.lastIndex() + 1 - fi
+	if lo < fi || hi > fi+length {
+		l.logger.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
+	}
+	return nil
 }

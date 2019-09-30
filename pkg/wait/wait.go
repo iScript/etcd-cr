@@ -10,7 +10,7 @@ type Wait interface {
 	// 注册
 	Register(id uint64) <-chan interface{}
 	//根据id触发等待中的通道
-	//Trigger(id uint64, x interface{})
+	Trigger(id uint64, x interface{})
 	//IsRegistered(id uint64) bool
 }
 
@@ -36,4 +36,15 @@ func (w *list) Register(id uint64) <-chan interface{} {
 		log.Panicf("dup id %x", id)
 	}
 	return ch
+}
+
+func (w *list) Trigger(id uint64, x interface{}) {
+	w.l.Lock()
+	ch := w.m[id]
+	delete(w.m, id) // delete(map, 键)
+	w.l.Unlock()
+	if ch != nil {
+		ch <- x //向通道传值然后关闭这个通道
+		close(ch)
+	}
 }

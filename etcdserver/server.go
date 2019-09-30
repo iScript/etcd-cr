@@ -419,8 +419,32 @@ func (s *EtcdServer) getLogger() *zap.Logger {
 	return l
 }
 
+func tickToDur(ticks int, tickMs uint) string {
+	return fmt.Sprintf("%v", time.Duration(ticks)*time.Duration(tickMs)*time.Millisecond)
+}
+
 func (s *EtcdServer) adjustTicks() {
-	fmt.Println("adjustTicks")
+
+	lg := s.getLogger()
+	clusterN := len(s.cluster.Members())
+	// 单机
+	if clusterN == 1 {
+		ticks := s.Cfg.ElectionTicks - 1
+		//fmt.Println("electiontttt", s.Cfg.ElectionTicks)
+		if lg != nil {
+			lg.Info(
+				"started as single-node; fast-forwarding election ticks",
+				zap.String("local-member-id", s.ID().String()),
+				zap.Int("forward-ticks", ticks),
+				zap.String("forward-duration", tickToDur(ticks, s.Cfg.TickMs)),
+				zap.Int("election-ticks", s.Cfg.ElectionTicks),
+				zap.String("election-timeout", tickToDur(s.Cfg.ElectionTicks, s.Cfg.TickMs)),
+			)
+		}
+		s.r.advanceTicks(ticks)
+		return
+	}
+	//fmt.Println(clusterN)
 }
 
 //Server初始化开始处理请求
@@ -652,7 +676,7 @@ func (s *EtcdServer) run() {
 
 	select {
 	case ap := <-s.r.apply():
-		fmt.Println("111", ap)
+		fmt.Println("11199999000000000", ap)
 	case leases := <-expiredLeaseC:
 		fmt.Println("222", leases)
 	case err := <-s.errorc:
@@ -804,6 +828,39 @@ func (s *EtcdServer) publish(timeout time.Duration) {
 			}
 			return
 		}
+	}
+}
+
+func (s *EtcdServer) parseProposeCtxErr(err error, start time.Time) error {
+	switch err {
+	case context.Canceled:
+		return ErrCanceled
+
+	case context.DeadlineExceeded:
+		s.leadTimeMu.RLock()
+		curLeadElected := s.leadElectedTime
+		s.leadTimeMu.RUnlock()
+		prevLeadLost := curLeadElected.Add(-2 * time.Duration(s.Cfg.ElectionTicks) * time.Duration(s.Cfg.TickMs) * time.Millisecond)
+		if start.After(prevLeadLost) && start.Before(curLeadElected) {
+			return ErrTimeoutDueToLeaderFail
+		}
+		//lead := types.ID(s.getLead())
+		// switch lead {
+		// case types.ID(raft.None):
+		// 	// TODO: return error to specify it happens because the cluster does not have leader now
+		// case s.ID():
+		// 	if !isConnectedToQuorumSince(s.r.transport, start, s.ID(), s.cluster.Members()) {
+		// 		return ErrTimeoutDueToConnectionLost
+		// 	}
+		// default:
+		// 	if !isConnectedSince(s.r.transport, start, lead) {
+		// 		return ErrTimeoutDueToConnectionLost
+		// 	}
+		// }
+		return ErrTimeout
+
+	default:
+		return err
 	}
 }
 

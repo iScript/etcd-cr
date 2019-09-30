@@ -3,6 +3,7 @@ package etcdserver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	pb "github.com/iScript/etcd-cr/etcdserver/etcdserverpb"
@@ -105,18 +106,25 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 	cctx, cancel := context.WithTimeout(ctx, s.Cfg.ReqTimeout())
 	defer cancel()
 
-	//start := time.Now()
+	start := time.Now()
 
 	err = s.r.Propose(cctx, data)
+
+	if err != nil {
+
+	}
+
+	//metrics
+	proposalsPending.Inc()
+	defer proposalsPending.Dec()
 
 	select {
 	case x := <-ch:
 		return x.(*applyResult), nil
-	case <-cctx.Done():
-		// proposalsFailed.Inc()
-		// s.w.Trigger(id, nil) // GC wait
-		// return nil, s.parseProposeCtxErr(cctx.Err(), start)
-		return nil, nil
+	case <-cctx.Done(): //超时
+		proposalsFailed.Inc()
+		s.w.Trigger(id, nil)                                // GC wait	删除map里的该通道，传nil，close
+		return nil, s.parseProposeCtxErr(cctx.Err(), start) //返回错误
 	case <-s.done:
 		return nil, ErrStopped
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/iScript/etcd-cr/etcdserver/api/v2store"
 	"github.com/iScript/etcd-cr/mvcc/backend"
 	"github.com/iScript/etcd-cr/pkg/types"
+	"github.com/iScript/etcd-cr/raft"
 
 	"github.com/coreos/go-semver/semver"
 	"go.uber.org/zap"
@@ -48,9 +49,9 @@ func NewClusterFromURLsMap(lg *zap.Logger, token string, urlsmap types.URLsMap) 
 		if _, ok := c.members[m.ID]; ok { //判断该id的member是否已存在
 			return nil, fmt.Errorf("member exists with identical ID %v", m)
 		}
-		// if uint64(m.ID) == raft.None {
-		// 	return nil, fmt.Errorf("cannot use %x as member id", raft.None)
-		// }
+		if uint64(m.ID) == raft.None {
+			return nil, fmt.Errorf("cannot use %x as member id", raft.None)
+		}
 
 		c.members[m.ID] = m
 	}
