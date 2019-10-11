@@ -19,8 +19,9 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	rn := &RawNode{
 		raft: r,
 	}
-	rn.prevSoftSt = r.softState() //将当前状态作为上一状态
-	rn.prevHardSt = r.hardState()
+	rn.prevSoftSt = r.softState() // 将当前状态作为上一状态
+	rn.prevHardSt = r.hardState() // 当前硬状态 ，如果是刚start则为 pb.HardState{Term:0,Vote:0,Commit: 0}
+
 	return rn, nil
 }
 

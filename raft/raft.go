@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iScript/etcd-cr/raft/confchange"
 	pb "github.com/iScript/etcd-cr/raft/raftpb"
 	"github.com/iScript/etcd-cr/raft/tracker"
 )
@@ -177,7 +178,7 @@ type raft struct {
 	maxMsgSize         uint64
 	maxUncommittedSize uint64
 
-	//其他节点日志复制情况，每个follower节点对应的NextIndex和MatchIndex值都封装在Progress实例中
+	//leader节点会记录其他节点日志复制情况，每个follower节点对应的NextIndex和MatchIndex值都封装在Progress实例中
 	prs tracker.ProgressTracker
 
 	//当前节点在集群中的角色，4种状态
@@ -190,7 +191,9 @@ type raft struct {
 	// Type 消息类型 共定义了19种消息类型
 	// From 发送消息的节点id  To 目标节点id
 	// Term 发送消息节点的任期Term，如果为0则是本地消息
-	// Entries leader节点复制到Follower节点的entry记录
+	// Entries entry记录,节点间传递的是消息，消息中有多条entry记录，每条entry记录对应一个独立操作。
+	//		字段为 Term  Type  Index  Data
+	// 		EntryType:EntryNormal代表普通的数据操作  EntryConfChange 代表集群变更操作
 	// LogTerm 该消息携带的第一条entry记录的term值
 	// Index 索引值，与具体消息类型相关
 	// Commit 消息发送节点的提交位置
@@ -257,7 +260,6 @@ func newRaft(c *Config) *raft {
 	// c.storage = raft.NewMemoryStorage()
 	// 返回storage初始状态信息， hardstate、confstate、error
 	hs, cs, err := c.Storage.InitialState()
-	//fmt.Println(hs, cs, 999999999)
 
 	if err != nil {
 		panic(err)
@@ -325,12 +327,21 @@ func (r *raft) softState() *SoftState { return &SoftState{Lead: r.lead, RaftStat
 
 // 获得当前raft的硬状态
 func (r *raft) hardState() pb.HardState {
+
 	return pb.HardState{
 		Term:   r.Term,
 		Vote:   r.Vote,
 		Commit: r.raftLog.committed,
 	}
 }
+
+// maybeCommit attempts to advance the commit index. Returns true if
+// the commit index changed (in which case the caller should call
+// r.bcastAppend).
+// func (r *raft) maybeCommit() bool {
+// 	mci := r.prs.Committed()
+// 	return r.raftLog.maybeCommit(mci, r.Term)
+// }
 
 // 重置字段
 func (r *raft) reset(term uint64) {
@@ -369,6 +380,7 @@ func (r *raft) reset(term uint64) {
 // 周期性地调用该方法推进electionElapsed并检测是否超时,follower时
 func (r *raft) tickElection() {
 	r.electionElapsed++
+
 	//fmt.Println("选举时间", r.electionElapsed, r.randomizedElectionTimeout, r.promotable(), r.pastElectionTimeout())
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0 //重置
@@ -417,9 +429,84 @@ func (r *raft) promotable() bool {
 	return pr != nil && !pr.IsLearner
 }
 
-// func (r *raft) applyConfChange(cc pb.ConfChangeV2) pb.ConfState {
+// 集群变更操作
+func (r *raft) applyConfChange(cc pb.ConfChangeV2) pb.ConfState {
+	cfg, prs, err := func() (tracker.Config, tracker.ProgressMap, error) {
 
-// }
+		changer := confchange.Changer{
+			Tracker:   r.prs,
+			LastIndex: r.raftLog.lastIndex(),
+		}
+		// if cc.LeaveJoint() {
+		// 	return changer.LeaveJoint()
+		// } else if autoLeave, ok := cc.EnterJoint(); ok {
+		// 	return changer.EnterJoint(autoLeave, cc.Changes...)
+		// }
+
+		return changer.Simple(cc.Changes...)
+
+	}()
+
+	if err != nil {
+		// TODO(tbg): return the error to the caller.
+		panic(err)
+	}
+
+	return r.switchToConfig(cfg, prs)
+
+}
+
+func (r *raft) switchToConfig(cfg tracker.Config, prs tracker.ProgressMap) pb.ConfState {
+	r.prs.Config = cfg
+	r.prs.Progress = prs
+	r.logger.Infof("%x switched to configuration %s", r.id, r.prs.Config)
+
+	cs := r.prs.ConfState()
+	pr, ok := r.prs.Progress[r.id]
+
+	// Update whether the node itself is a learner, resetting to false when the
+	// node is removed.
+	r.isLearner = ok && pr.IsLearner
+
+	if (!ok || r.isLearner) && r.state == StateLeader {
+		// This node is leader and was removed or demoted. We prevent demotions
+		// at the time writing but hypothetically we handle them the same way as
+		// removing the leader: stepping down into the next Term.
+		//
+		// TODO(tbg): step down (for sanity) and ask follower with largest Match
+		// to TimeoutNow (to avoid interruption). This might still drop some
+		// proposals but it's better than nothing.
+		//
+		// TODO(tbg): test this branch. It is untested at the time of writing.
+		return cs
+	}
+
+	// The remaining steps only make sense if this node is the leader and there
+	// are other nodes.
+	if r.state != StateLeader || len(cs.Voters) == 0 {
+		return cs
+	}
+
+	// 判断commit ， 广播
+	// if r.maybeCommit() {
+	// 	// If the configuration change means that more entries are committed now,
+	// 	// broadcast/append to everyone in the updated config.
+	// 	r.bcastAppend()
+	// } else {
+	// 	// Otherwise, still probe the newly added replicas; there's no reason to
+	// 	// let them wait out a heartbeat interval (or the next incoming
+	// 	// proposal).
+	// 	r.prs.Visit(func(id uint64, pr *tracker.Progress) {
+	// 		r.maybeSendAppend(id, false /* sendIfEmpty */)
+	// 	})
+	// }
+	// If the the leadTransferee was removed, abort the leadership transfer.
+	if _, tOK := r.prs.Progress[r.leadTransferee]; !tOK && r.leadTransferee != 0 {
+		r.abortLeaderTransfer()
+	}
+
+	return cs
+}
 
 func (r *raft) loadState(state pb.HardState) {
 	fmt.Println(state.Vote, state.Term)

@@ -67,6 +67,35 @@ func (l *raftLog) String() string {
 	return fmt.Sprintf("committed=%d, applied=%d, unstable.offset=%d, len(unstable.Entries)=%d", l.committed, l.applied, l.unstable.offset, len(l.unstable.entries))
 }
 
+// func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
+// 	if l.matchTerm(index, logTerm) {
+// 		lastnewi = index + uint64(len(ents))
+// 		ci := l.findConflict(ents)
+// 		switch {
+// 		case ci == 0:
+// 		case ci <= l.committed:
+// 			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
+// 		default:
+// 			offset := index + 1
+// 			l.append(ents[ci-offset:]...)
+// 		}
+// 		l.commitTo(min(committed, lastnewi))
+// 		return lastnewi, true
+// 	}
+// 	return 0, false
+// }
+
+func (l *raftLog) append(ents ...pb.Entry) uint64 {
+	if len(ents) == 0 {
+		return l.lastIndex()
+	}
+	if after := ents[0].Index - 1; after < l.committed {
+		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+	}
+	l.unstable.truncateAndAppend(ents)
+	return l.lastIndex()
+}
+
 func (l *raftLog) unstableEntries() []pb.Entry {
 	if len(l.unstable.entries) == 0 {
 		return nil

@@ -26,3 +26,13 @@ func (c MajorityConfig) String() string {
 	buf.WriteByte(')')
 	return buf.String()
 }
+
+// Slice returns the MajorityConfig as a sorted slice.
+func (c MajorityConfig) Slice() []uint64 {
+	var sl []uint64
+	for id := range c {
+		sl = append(sl, id)
+	}
+	sort.Slice(sl, func(i, j int) bool { return sl[i] < sl[j] })
+	return sl
+}

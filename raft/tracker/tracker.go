@@ -3,8 +3,10 @@ package tracker
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/iScript/etcd-cr/raft/quorum"
+	pb "github.com/iScript/etcd-cr/raft/raftpb"
 )
 
 type Config struct {
@@ -23,6 +25,42 @@ type Config struct {
 	// simplifies the implementation since it allows peers to have clarity about
 	// its current role without taking into account joint consensus.
 	Learners map[uint64]struct{}
+
+	LearnersNext map[uint64]struct{}
+}
+
+func (c Config) String() string {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "voters=%s", c.Voters)
+	if c.Learners != nil {
+		fmt.Fprintf(&buf, " learners=%s", quorum.MajorityConfig(c.Learners).String())
+	}
+	if c.LearnersNext != nil {
+		fmt.Fprintf(&buf, " learners_next=%s", quorum.MajorityConfig(c.LearnersNext).String())
+	}
+	if c.AutoLeave {
+		fmt.Fprintf(&buf, " autoleave")
+	}
+	return buf.String()
+}
+
+// Clone returns a copy of the Config that shares no memory with the original.
+func (c *Config) Clone() Config {
+	clone := func(m map[uint64]struct{}) map[uint64]struct{} {
+		if m == nil {
+			return nil
+		}
+		mm := make(map[uint64]struct{}, len(m))
+		for k := range m {
+			mm[k] = struct{}{}
+		}
+		return mm
+	}
+	return Config{
+		Voters:       quorum.JointConfig{clone(c.Voters[0]), clone(c.Voters[1])},
+		Learners:     clone(c.Learners),
+		LearnersNext: clone(c.LearnersNext),
+	}
 }
 
 // ProgressTracker追踪当前的活动配置及其他信息
@@ -42,12 +80,12 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 	p := ProgressTracker{
 		MaxInflight: maxInflight,
 		Config: Config{
-			// Voters: quorum.JointConfig{
-			// 	quorum.MajorityConfig{},
-			// 	nil, // only populated when used
-			// },
-			Learners: nil, // only populated when used
-			//LearnersNext: nil, // only populated when used
+			Voters: quorum.JointConfig{
+				quorum.MajorityConfig{},
+				nil, // only populated when used
+			},
+			Learners:     nil, // only populated when used
+			LearnersNext: nil, // only populated when used
 		},
 		Votes: map[uint64]bool{}, //{}初始化一个空map
 
@@ -55,6 +93,36 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 	}
 	return p
 }
+
+// ConfState returns a ConfState representing the active configuration.
+func (p *ProgressTracker) ConfState() pb.ConfState {
+	return pb.ConfState{
+		Voters:         p.Voters[0].Slice(),
+		VotersOutgoing: p.Voters[1].Slice(),
+		Learners:       quorum.MajorityConfig(p.Learners).Slice(),
+		LearnersNext:   quorum.MajorityConfig(p.LearnersNext).Slice(),
+		AutoLeave:      p.AutoLeave,
+	}
+}
+
+// type matchAckIndexer map[uint64]*Progress
+
+// var _ quorum.AckedIndexer = matchAckIndexer(nil)
+
+// // AckedIndex implements IndexLookuper.
+// func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
+// 	pr, ok := l[id]
+// 	if !ok {
+// 		return 0, false
+// 	}
+// 	return quorum.Index(pr.Match), true
+// }
+
+// // Committed returns the largest log index known to be committed based on what
+// // the voting members of the group have acknowledged.
+// func (p *ProgressTracker) Committed() uint64 {
+// 	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress)))
+// }
 
 // 为tracked progresses调用函数f
 func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
