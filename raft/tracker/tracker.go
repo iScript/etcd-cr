@@ -177,3 +177,37 @@ func (p *ProgressTracker) LearnerNodes() []uint64 {
 func (p *ProgressTracker) ResetVotes() {
 	p.Votes = map[uint64]bool{}
 }
+
+// 给这个id的node投票
+func (p *ProgressTracker) RecordVote(id uint64, v bool) {
+	_, ok := p.Votes[id]
+	if !ok {
+		p.Votes[id] = v
+	}
+}
+
+// TallyVotes returns the number of granted and rejected Votes, and whether the
+// election outcome is known.
+func (p *ProgressTracker) TallyVotes() (granted int, rejected int, _ quorum.VoteResult) {
+	// Make sure to populate granted/rejected correctly even if the Votes slice
+	// contains members no longer part of the configuration. This doesn't really
+	// matter in the way the numbers are used (they're informational), but might
+	// as well get it right.
+	for id, pr := range p.Progress {
+		if pr.IsLearner {
+			continue
+		}
+		v, voted := p.Votes[id]
+		if !voted {
+			continue
+		}
+		fmt.Println(v)
+		if v {
+			granted++
+		} else {
+			rejected++
+		}
+	}
+	result := p.Voters.VoteResult(p.Votes)
+	return granted, rejected, result
+}

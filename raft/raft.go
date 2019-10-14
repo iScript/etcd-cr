@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iScript/etcd-cr/raft/confchange"
+	"github.com/iScript/etcd-cr/raft/quorum"
 	pb "github.com/iScript/etcd-cr/raft/raftpb"
 	"github.com/iScript/etcd-cr/raft/tracker"
 )
@@ -385,9 +386,7 @@ func (r *raft) tickElection() {
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0 //重置
 		// 发起选举
-
-		fmt.Println("发起选举~~~")
-		//r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
+		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
 
@@ -401,7 +400,114 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
 }
 
+//成为候选人
+func (r *raft) becomeCandidate() {
+	// TODO(xiangli) remove the panic when the raft implementation is stable
+	if r.state == StateLeader {
+		panic("invalid transition [leader -> candidate]")
+	}
+	r.step = stepCandidate
+	r.reset(r.Term + 1)
+	r.tick = r.tickElection
+	r.Vote = r.id
+	r.state = StateCandidate
+	r.logger.Infof("%x became candidate at term %d", r.id, r.Term)
+}
+
+// 参与选举，转换为候选人状态
+func (r *raft) campaign(t CampaignType) {
+	//fmt.Println(t)
+	if !r.promotable() {
+		// This path should not be hit (callers are supposed to check), but
+		// better safe than sorry.
+		r.logger.Warningf("%x is unpromotable; campaign() should have been called", r.id)
+	}
+
+	//var term uint64
+	var voteMsg pb.MessageType
+	if t == campaignPreElection {
+		// r.becomePreCandidate()
+		// voteMsg = pb.MsgPreVote
+		// // PreVote RPCs are sent for the next term before we've incremented r.Term.
+		// term = r.Term + 1
+	} else {
+		r.becomeCandidate()
+		voteMsg = pb.MsgVote
+		//term = r.Term
+	}
+
+	// 投票
+	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
+		// We won the election after voting for ourselves (which must mean that
+		// this is a single-node cluster). Advance to the next state.
+		if t == campaignPreElection {
+			//r.campaign(campaignElection)
+
+		} else {
+			fmt.Println("开始成为leader")
+			//
+			//r.becomeLeader()
+		}
+		return
+	}
+
+}
+
+// 投票
+func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected int, result quorum.VoteResult) {
+	if v {
+		r.logger.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
+	} else {
+		r.logger.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
+	}
+	r.prs.RecordVote(id, v)
+	return r.prs.TallyVotes()
+}
+
 func (r *raft) Step(m pb.Message) error {
+
+	switch {
+	case m.Term == 0:
+		// 本地消息
+	case m.Term > r.Term:
+
+	}
+
+	switch m.Type {
+	case pb.MsgHup:
+		//fmt.Println(r.state, StateLeader)	StateFollower StateLeader
+		// 如果不是leader
+		if r.state != StateLeader {
+			if !r.promotable() {
+				r.logger.Warningf("%x is unpromotable and can not campaign; ignoring MsgHup", r.id)
+				return nil
+			}
+
+			// 判断需要全部applied了才能参与
+			// ents, err := r.raftLog.slice(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
+			// if err != nil {
+			// 	r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
+			// }
+			// if n := numOfPendingConf(ents); n != 0 && r.raftLog.committed > r.raftLog.applied {
+			// 	r.logger.Warningf("%x cannot campaign at term %d since there are still %d pending configuration changes to apply", r.id, r.Term, n)
+			// 	return nil
+			// }
+
+			//参与选举
+			if r.preVote {
+				r.campaign(campaignPreElection)
+			} else {
+				r.campaign(campaignElection)
+			}
+		} else {
+			r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
+		}
+	}
+
+	return nil
+}
+
+func stepCandidate(r *raft, m pb.Message) error {
 	return nil
 }
 
@@ -525,4 +631,14 @@ func (r *raft) pastElectionTimeout() bool {
 
 func stepFollower(r *raft, m pb.Message) error {
 	return nil
+}
+
+func numOfPendingConf(ents []pb.Entry) int {
+	n := 0
+	for i := range ents {
+		if ents[i].Type == pb.EntryConfChange {
+			n++
+		}
+	}
+	return n
 }

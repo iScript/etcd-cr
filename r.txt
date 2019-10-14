@@ -1,2 +1,0 @@
-embed/etcd   newserver  s.start   serveClients/servePeer
-             startNode  raft.StartNode
